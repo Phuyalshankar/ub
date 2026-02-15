@@ -3,39 +3,78 @@ import { useState, useRef, useCallback } from "react";
 
 // ==================== TYPES ====================
 export type SFOptions = {
-  params?: Record<string, any>; data?: any; headers?: Record<string, string>; token?: string;
-  timeout?: number; maxRetries?: number; retryDelay?: number; signal?: AbortSignal;
-  cache?: RequestCache; responseType?: 'json'|'text'|'blob'|'arrayBuffer'|'formData';
-  baseURL?: string; onSuccess?: (d: any) => void; onError?: (e: any) => void;
-  onFinally?: () => void; silent?: boolean; withCredentials?: boolean; mode?: RequestMode;
+  params?: Record<string, any>;
+  data?: any;
+  headers?: Record<string, string>;
+  token?: string;
+  timeout?: number;
+  maxRetries?: number;
+  retryDelay?: number;
+  signal?: AbortSignal;
+  cache?: RequestCache;
+  responseType?: 'json' | 'text' | 'blob' | 'arrayBuffer' | 'formData';
+  baseURL?: string;
+  onSuccess?: (d: any) => void;
+  onError?: (e: any) => void;
+  onFinally?: () => void;
+  silent?: boolean;
+  withCredentials?: boolean;
+  mode?: RequestMode;
 };
 
 export type SFResponse<T = any> = {
-  data?: T; status?: number; headers?: Headers; error?: string;
-  success: boolean; config?: { method: string; url: string };
+  data?: T;
+  status?: number;
+  headers?: Headers;
+  error?: string;
+  success: boolean;
+  config?: { method: string; url: string };
 };
 
 export class SFError extends Error {
-  constructor(m: string, public status?: number, public code = "UNKNOWN", public response?: any, public config?: any) {
-    super(m); this.name = "SFError";
+  constructor(
+    m: string,
+    public status?: number,
+    public code = "UNKNOWN",
+    public response?: any,
+    public config?: any
+  ) {
+    super(m);
+    this.name = "SFError";
   }
   isAbort = () => this.code === "ABORT_ERROR" || this.name === "AbortError";
   isAuth = () => this.status === 401;
   isServer = () => this.status && this.status >= 500;
 }
 
-interface SFConfig extends SFOptions { method: string; url: string; _retryCount?: number; _preventRefresh?: boolean; }
+interface SFConfig extends SFOptions {
+  method: string;
+  url: string;
+  _retryCount?: number;
+  _preventRefresh?: boolean;
+}
 
 // ==================== INTERCEPTORS ====================
 type ReqFn = (c: SFConfig) => SFConfig | Promise<SFConfig>;
 type ResFn = (r: SFResponse) => SFResponse | Promise<SFResponse>;
 type ErrFn = (e: any) => any | Promise<any>;
 
-const interceptors = { 
-  req: [] as ReqFn[], res: [] as ResFn[], err: [] as ErrFn[],
-  useReq: (fn: ReqFn) => (interceptors.req.push(fn), () => { interceptors.req = interceptors.req.filter(f => f !== fn); }),
-  useRes: (fn: ResFn, err?: ErrFn) => (interceptors.res.push(fn), err && interceptors.err.push(err), 
-    () => { interceptors.res = interceptors.res.filter(f => f !== fn); err && (interceptors.err = interceptors.err.filter(e => e !== err)); }),
+const interceptors = {
+  req: [] as ReqFn[],
+  res: [] as ResFn[],
+  err: [] as ErrFn[],
+  useReq: (fn: ReqFn) => {
+    interceptors.req.push(fn);
+    return () => { interceptors.req = interceptors.req.filter(f => f !== fn); };
+  },
+  useRes: (fn: ResFn, err?: ErrFn) => {
+    interceptors.res.push(fn);
+    err && interceptors.err.push(err);
+    return () => {
+      interceptors.res = interceptors.res.filter(f => f !== fn);
+      err && (interceptors.err = interceptors.err.filter(e => e !== err));
+    };
+  },
   clear: () => { interceptors.req = []; interceptors.res = []; interceptors.err = []; }
 };
 
@@ -44,8 +83,14 @@ const refreshQueue = (() => {
   let busy = false;
   const q: { resolve: (v: any) => void; reject: (e: any) => void; fn: () => Promise<any>; }[] = [];
   return {
-    enqueue: <T>(fn: () => Promise<SFResponse<T>>) => new Promise<SFResponse<T>>((res, rej) => q.push({ fn: fn as any, resolve: res, reject: rej })),
-    flush: async () => { while (q.length) { const { fn, resolve, reject } = q.shift()!; try { resolve(await fn()); } catch (e) { reject(e); } } },
+    enqueue: <T>(fn: () => Promise<SFResponse<T>>) =>
+      new Promise<SFResponse<T>>((res, rej) => q.push({ fn: fn as any, resolve: res, reject: rej })),
+    flush: async () => {
+      while (q.length) {
+        const { fn, resolve, reject } = q.shift()!;
+        try { resolve(await fn()); } catch (e) { reject(e); }
+      }
+    },
     rejectAll: (err: any) => { while (q.length) q.shift()!.reject(err); },
     clear: () => (q.length = 0, busy = false),
     get busy() { return busy; }, set busy(v: boolean) { busy = v; }
@@ -54,15 +99,20 @@ const refreshQueue = (() => {
 
 // ==================== CONFIG ====================
 const C = {
-  BASE_URL: "", REFRESH_URL: "/auth/refresh", TOKEN_KEY: "access_token",
-  TIMEOUT: 30000, MAX_RETRIES: 2, RETRY_DELAY: 600, SILENT: true,
-  WITH_CRED: false, MODE: 'cors' as RequestMode,
+  BASE_URL: "",
+  REFRESH_URL: "/auth/refresh",
+  TOKEN_KEY: "access_token",
+  TIMEOUT: 30000,
+  MAX_RETRIES: 2,
+  RETRY_DELAY: 600,
+  SILENT: true,
+  WITH_CRED: false,
+  MODE: 'cors' as RequestMode,
 };
 
 // ==================== UTILS ====================
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// Query string builder - no special handling
 const qs = (p?: Record<string, any>) => {
   if (!p) return "";
   const entries = Object.entries(p)
@@ -75,7 +125,7 @@ const qs = (p?: Record<string, any>) => {
 const mergeSignals = (...s: AbortSignal[]): AbortSignal => {
   const c = new AbortController();
   const abort = () => { c.abort(); s.forEach(s => s.removeEventListener('abort', abort)); };
-  s.forEach(s => s.aborted ? abort() : s.addEventListener('abort', abort));
+  s.forEach(sig => sig.aborted ? abort() : sig.addEventListener('abort', abort));
   return c.signal;
 };
 
@@ -83,15 +133,15 @@ const getToken = () => typeof localStorage !== 'undefined' ? localStorage.getIte
 const setToken = (t: string) => typeof localStorage !== 'undefined' && localStorage.setItem(C.TOKEN_KEY, t);
 const removeToken = () => typeof localStorage !== 'undefined' && localStorage.removeItem(C.TOKEN_KEY);
 
-// ==================== CORE ====================
+// ==================== CORE REQUEST ====================
 async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
   for (const fn of interceptors.req) c = await Promise.resolve(fn(c));
-  
+
   let { method, url, baseURL = C.BASE_URL, params, data, headers = {}, 
-    token = getToken() ?? undefined, timeout = C.TIMEOUT, maxRetries = C.MAX_RETRIES,
-    retryDelay = C.RETRY_DELAY, signal: userSignal, responseType = 'json', 
-    _preventRefresh, onSuccess, onError, onFinally, silent = C.SILENT,
-    withCredentials = C.WITH_CRED, mode = C.MODE } = c;
+        token = getToken() ?? undefined, timeout = C.TIMEOUT, maxRetries = C.MAX_RETRIES,
+        retryDelay = C.RETRY_DELAY, signal: userSignal, responseType = 'json', 
+        _preventRefresh, onSuccess, onError, onFinally, silent = C.SILENT,
+        withCredentials = C.WITH_CRED, mode = C.MODE } = c;
 
   let attempt = 0;
   let completed = false;
@@ -105,11 +155,7 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
     try {
       fullUrl = url.startsWith("http") ? url : baseURL + url;
       const query = qs(params);
-      
-      // 🔥 FIX 1: Add query string correctly without breaking existing URL
-      if (query) {
-        fullUrl += (fullUrl.includes('?') ? '&' : '') + query.slice(1);
-      }
+      if (query) fullUrl += (fullUrl.includes('?') ? '&' : '') + query.slice(1);
 
       let body: BodyInit | undefined, contentType: string | undefined;
       if (data instanceof FormData) body = data;
@@ -141,24 +187,20 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
           const text = await res.text(); 
           parsed = text ? JSON.parse(text) : null; 
         }
-      } catch (e) {
-        parsed = null;
-      }
+      } catch { parsed = null; }
 
       let response: SFResponse = { 
-        success: res.ok, 
-        data: parsed, 
-        status: res.status, 
-        headers: res.headers, 
+        success: res.ok, data: parsed, status: res.status, headers: res.headers, 
         error: res.ok ? undefined : (parsed?.message || parsed?.error || `HTTP ${res.status}`), 
         config: { method, url: fullUrl } 
       };
 
       for (const fn of interceptors.res) response = await Promise.resolve(fn(response));
 
+      // Handle token refresh
       if (res.status === 401 && !_preventRefresh && !url.includes('/auth/refresh') && !url.startsWith("http")) {
         if (refreshQueue.busy) return refreshQueue.enqueue(() => coreRequest<T>({ ...c, _preventRefresh: true, _retryCount: 0 }));
-        
+
         refreshQueue.busy = true;
         try {
           const refreshRes = await fetch(baseURL + C.REFRESH_URL, { 
@@ -182,69 +224,34 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
         }
       }
 
-      // 🔥 FIX 2: Always throw SFError with CORRECT status
-      if (!res.ok) {
-        throw new SFError(
-          response.error || "Request failed",
-          res.status, // ✅ Preserve original HTTP status (404, 401, 500)
-          "HTTP_ERROR",
-          parsed,
-          { method, url: fullUrl }
-        );
-      }
-      
+      if (!res.ok) throw new SFError(response.error || "Request failed", res.status, "HTTP_ERROR", parsed, { method, url: fullUrl });
+
       onSuccess?.(response.data); 
       onFinally?.();
       return response as SFResponse<T>;
 
     } catch (err: any) {
       if (timer) clearTimeout(timer);
-      
-      // Handle abort errors
+
       if (err.name === "AbortError" || err.message?.includes("aborted") || err.code === "ABORT_ERROR") {
         const abortErr = new SFError("Request aborted", undefined, "ABORT_ERROR");
         abortErr.name = "AbortError";
-        onError?.(abortErr); 
-        onFinally?.();
+        onError?.(abortErr); onFinally?.();
         throw abortErr;
       }
 
-      // Handle network errors
       if (err.code === 'NETWORK_ERROR' || err.message?.includes('fetch')) {
         const netErr = new SFError(`Network error: ${fullUrl || url}`, undefined, 'NETWORK_ERROR');
-        onError?.(netErr); 
-        onFinally?.();
+        onError?.(netErr); onFinally?.();
         throw netErr;
       }
 
-      // Check if we should retry (only for 5xx errors)
-      const shouldRetry = attempt < maxRetries && 
-        err?.status && err.status >= 500;
+      const shouldRetry = attempt < maxRetries && err?.status && err.status >= 500;
+      if (shouldRetry) { attempt++; await delay(retryDelay * Math.pow(2, attempt) + Math.random() * 100); continue; }
 
-      if (shouldRetry) {
-        attempt++;
-        await delay(retryDelay * Math.pow(2, attempt) + Math.random() * 100);
-        continue;
-      }
-
-      // 🔥 FIX 3: Preserve status when wrapping error
-      let finalErr: SFError;
-      if (err instanceof SFError) {
-        finalErr = err; // Already has status
-      } else {
-        // Plain Error - preserve status if available
-        finalErr = new SFError(
-          err.message || "Error",
-          err.status, // ✅ This could be 404 from earlier fix
-          "UNKNOWN",
-          undefined,
-          { method, url: fullUrl }
-        );
-      }
-      
+      let finalErr: SFError = err instanceof SFError ? err : new SFError(err.message || "Error", err.status, "UNKNOWN", undefined, { method, url: fullUrl });
       for (const fn of interceptors.err) await Promise.resolve(fn(finalErr));
-      onError?.(finalErr); 
-      onFinally?.();
+      onError?.(finalErr); onFinally?.();
       throw finalErr;
     }
   }
@@ -259,13 +266,13 @@ export const sf = {
   patch: <T>(u: string, d?: any, o?: SFOptions) => coreRequest<T>({ method: "PATCH", url: u, data: d, ...o }),
   delete: <T>(u: string, o?: SFOptions) => coreRequest<T>({ method: "DELETE", url: u, ...o }),
   request: <T>(c: SFConfig) => coreRequest<T>(c),
-  
+
   interceptors: { 
     request: { use: interceptors.useReq, clear: () => { interceptors.req = []; } },
     response: { use: interceptors.useRes, clear: () => { interceptors.res = []; interceptors.err = []; } },
     clear: interceptors.clear 
   },
-  
+
   config: {
     baseURL: C.BASE_URL,
     timeout: C.TIMEOUT,
@@ -284,7 +291,7 @@ export const sf = {
     setWithCredentials: (w: boolean) => C.WITH_CRED = w,
     setMode: (m: RequestMode) => C.MODE = m,
   },
-  
+
   token: { get: getToken, set: setToken, remove: removeToken },
   createCancel: () => { const c = new AbortController(); return { signal: c.signal, cancel: () => c.abort() }; },
   clearQueue: () => refreshQueue.clear(),
@@ -305,44 +312,31 @@ export function useSF<T = any>() {
 
   const execute = useCallback(async <R = T>(method: string, url: string, opts: SFOptions = {}): Promise<SFResponse<R>> => {
     state.current.completed = false;
-    if (abortRef.current) abortRef.current.abort();
-
+    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setLoading(true); 
-    setError(null);
+    setLoading(true); setError(null);
 
     try {
       const res = await sf.request<R>({ method, url, signal: controller.signal, ...opts });
-      
       if (state.current.mounted && !state.current.completed) {
-        if (res.success) {
-          setData(res.data as unknown as T ?? null);
-          setError(null);
-        } else {
-          setError(new SFError(res.error || "Failed", res.status));
-          setData(null);
-        }
+        if (res.success) { setData(res.data as unknown as T ?? null); setError(null); }
+        else { setError(new SFError(res.error || "Failed", res.status)); setData(null); }
         setLoading(false);
       }
-      
-      if (abortRef.current === controller) abortRef.current = null;
+      abortRef.current === controller && (abortRef.current = null);
       state.current.completed = true;
       return res;
-      
     } catch (err: any) {
       if (err.name === "AbortError" || err.code === "ABORT_ERROR") {
-        if (abortRef.current === controller) abortRef.current = null;
+        abortRef.current === controller && (abortRef.current = null);
         return { success: false, error: "Aborted" } as SFResponse<R>;
       }
-      
       if (state.current.mounted && !state.current.completed) {
         setError(err instanceof SFError ? err : new SFError(err.message || "Failed", err.status));
-        setData(null);
-        setLoading(false);
+        setData(null); setLoading(false);
       }
-      
-      if (abortRef.current === controller) abortRef.current = null;
+      abortRef.current === controller && (abortRef.current = null);
       throw err;
     }
   }, []);
@@ -354,8 +348,8 @@ export function useSF<T = any>() {
 
   return {
     loading, data, error,
-    isError: !!error, 
-    isEmpty: !loading && !error && (!data || (Array.isArray(data) && !data.length)), 
+    isError: !!error,
+    isEmpty: !loading && !error && (!data || (Array.isArray(data) && !data.length)),
     isSuccess: !loading && !error && !!data,
     execute,
     get: useCallback(<R = T>(u: string, o?: SFOptions) => execute<R>("GET", u, o), [execute]),
@@ -371,9 +365,44 @@ export function useSF<T = any>() {
 sf.interceptors.response.use(
   r => r,
   e => { 
-    if (e.name !== "AbortError" && !C.SILENT) {
-      console.error(`❌ ${e.config?.method} ${e.config?.url}:`, e.message);
-    }
-    return Promise.reject(e); 
+    if (e.name !== "AbortError" && !C.SILENT) console.error(`❌ ${e.config?.method} ${e.config?.url}:`, e.message);
+    return Promise.reject(e);
   }
 );
+
+// ==================== HELPER API FACTORY ====================
+export const api = (baseURL: string) => ({
+  get: async <T = any>(url: string, options?: SFOptions) => 
+    await sf.get<T>(`${baseURL}/${url}`, options),
+  
+  post: async <T = any>(url: string, data?: any, options?: SFOptions) => 
+    await sf.post<T>(`${baseURL}/${url}`, data, options),
+  
+  put: async <T = any>(url: string, data?: any, options?: SFOptions) => 
+    await sf.put<T>(`${baseURL}/${url}`, data, options),
+  
+  patch: async <T = any>(url: string, data?: any, options?: SFOptions) => 
+    await sf.patch<T>(`${baseURL}/${url}`, data, options),
+  
+  delete: async <T = any>(url: string, options?: SFOptions) => 
+    await sf.delete<T>(`${baseURL}/${url}`, options),
+  
+  // Convenience methods
+  getAll: async <T = any>(url: string, options?: SFOptions) => 
+    await sf.get<T>(`${baseURL}/${url}`, options),
+  
+  postData: async <T = any>(url: string, data: any, options?: SFOptions) => 
+    await sf.post<T>(`${baseURL}/${url}`, data, options),
+  
+  putData: async <T = any>(url: string, data: any, options?: SFOptions) => 
+    await sf.put<T>(`${baseURL}/${url}`, data, options),
+  
+  patchData: async <T = any>(url: string, data: any, options?: SFOptions) => 
+    await sf.patch<T>(`${baseURL}/${url}`, data, options),
+  
+  deleteData: async <T = any>(url: string, options?: SFOptions) => 
+    await sf.delete<T>(`${baseURL}/${url}`, options),
+});
+
+// ==================== DEFAULT EXPORT ====================
+export default sf;
