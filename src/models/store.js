@@ -1,6 +1,6 @@
 
 import createFullStore,{createResource} from "../hooks/service/map";
-const api= createFullStore({
+const store= createFullStore({
   baseUrl:'https://fakestoreapi.com',
   apiData:[],
   apiError:null,
@@ -12,11 +12,11 @@ const api= createFullStore({
   range:[0,10000],
 
 })
-const createApiResource=(endpoint,key)=>{
-    return createResource(api,{
+const apiResource=(endpoint,key)=>{
+    return createResource(store,{
       key:key,
-      fetcher:(res)=>api.superFetch(`${api.baseUrl}/${endpoint}`),
+       fetcher:()=> store.api.get(`${store.baseUrl}/${endpoint}`),
       map:(res)=> res
     })
 }
-export {api,createApiResource}
+export {store,apiResource}
