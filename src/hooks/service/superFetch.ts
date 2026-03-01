@@ -1,5 +1,5 @@
-// superFetch.ts - 0 Loss Full Update
-import { useState, useRef, useCallback } from "react";
+// superFetch.ts - Complete Version with setData for Optimistic Updates
+import { useState, useRef, useCallback, useEffect } from "react";
 
 // ==================== TYPES ====================
 export type SFOptions = {
@@ -91,9 +91,13 @@ const refreshQueue = (() => {
         try { resolve(await fn()); } catch (e) { reject(e); }
       }
     },
-    rejectAll: (err: any) => { while (q.length) q.shift()!.reject(err); },
-    clear: () => (q.length = 0, busy = false),
-    get busy() { return busy; }, set busy(v: boolean) { busy = v; }
+    rejectAll: (err: any) => { 
+      while (q.length) q.shift()!.reject(err);
+      q.length = 0; // Clear queue
+    },
+    clear: () => { q.length = 0; busy = false; },
+    get busy() { return busy; }, 
+    set busy(v: boolean) { busy = v; }
   };
 })();
 
@@ -113,20 +117,50 @@ const C = {
 // ==================== UTILS ====================
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// Improved qs function to handle nested objects and arrays
 const qs = (p?: Record<string, any>) => {
   if (!p) return "";
+  
   const entries = Object.entries(p)
     .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => [k, String(v)]);
+    .flatMap(([k, v]) => {
+      // Handle nested objects and arrays
+      if (Array.isArray(v)) {
+        return v.map((item, index) => [`${k}[${index}]`, String(item)]);
+      } else if (typeof v === 'object' && v !== null) {
+        return Object.entries(v).map(([subKey, subValue]) => 
+          [`${k}.${subKey}`, String(subValue)]
+        );
+      } else {
+        return [[k, String(v)]];
+      }
+    });
+  
   if (entries.length === 0) return "";
   return "?" + new URLSearchParams(entries).toString();
 };
 
-const mergeSignals = (...s: AbortSignal[]): AbortSignal => {
-  const c = new AbortController();
-  const abort = () => { c.abort(); s.forEach(s => s.removeEventListener('abort', abort)); };
-  s.forEach(sig => sig.aborted ? abort() : sig.addEventListener('abort', abort));
-  return c.signal;
+const mergeSignals = (...signals: AbortSignal[]): { signal: AbortSignal; cleanup: () => void } => {
+  const controller = new AbortController();
+  const abortHandler = () => {
+    controller.abort();
+    cleanup();
+  };
+  
+  const cleanup = () => {
+    signals.forEach(sig => sig.removeEventListener('abort', abortHandler));
+  };
+
+  signals.forEach(sig => {
+    if (sig.aborted) {
+      controller.abort();
+      cleanup();
+    } else {
+      sig.addEventListener('abort', abortHandler);
+    }
+  });
+
+  return { signal: controller.signal, cleanup };
 };
 
 const getToken = () => typeof localStorage !== 'undefined' ? localStorage.getItem(C.TOKEN_KEY) : null;
@@ -149,8 +183,12 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
 
   while (attempt <= maxRetries) {
     const controller = new AbortController();
-    const timer = timeout ? setTimeout(() => !completed && controller.abort("timeout"), timeout) : null;
-    const finalSignal = userSignal ? mergeSignals(userSignal, controller.signal) : controller.signal;
+    // FIX 1: Remove "timeout" argument as AbortController.abort() doesn't support arguments
+    const timer = timeout ? setTimeout(() => !completed && controller.abort(), timeout) : null;
+    
+    const { signal: finalSignal, cleanup } = userSignal 
+      ? mergeSignals(userSignal, controller.signal) 
+      : { signal: controller.signal, cleanup: () => {} };
 
     try {
       fullUrl = url.startsWith("http") ? url : baseURL + url;
@@ -234,7 +272,13 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
       if (timer) clearTimeout(timer);
 
       if (err.name === "AbortError" || err.message?.includes("aborted") || err.code === "ABORT_ERROR") {
-        const abortErr = new SFError("Request aborted", undefined, "ABORT_ERROR");
+        // Check if this was a timeout abort
+        const isTimeout = err.message?.includes("timeout") || err.code === "TIMEOUT";
+        const abortErr = new SFError(
+          isTimeout ? "Request timeout" : "Request aborted", 
+          undefined, 
+          isTimeout ? "TIMEOUT" : "ABORT_ERROR"
+        );
         abortErr.name = "AbortError";
         onError?.(abortErr); onFinally?.();
         throw abortErr;
@@ -253,6 +297,8 @@ async function coreRequest<T>(c: SFConfig): Promise<SFResponse<T>> {
       for (const fn of interceptors.err) await Promise.resolve(fn(finalErr));
       onError?.(finalErr); onFinally?.();
       throw finalErr;
+    } finally {
+      cleanup();
     }
   }
   throw new SFError("Max retries exceeded");
@@ -297,67 +343,212 @@ export const sf = {
   clearQueue: () => refreshQueue.clear(),
 };
 
-// ==================== REACT HOOK ====================
+// ==================== REACT HOOK WITH SETDATA ====================
 export function useSF<T = any>() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<SFError | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const state = useRef({ mounted: true, completed: false });
+  const mountedRef = useRef(true);
 
-  useState(() => { 
-    state.current.mounted = true; 
-    return () => { state.current.mounted = false; state.current.completed = true; abortRef.current?.abort(); }; 
-  });
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
 
   const execute = useCallback(async <R = T>(method: string, url: string, opts: SFOptions = {}): Promise<SFResponse<R>> => {
-    state.current.completed = false;
     abortRef.current?.abort();
+    
     const controller = new AbortController();
     abortRef.current = controller;
-    setLoading(true); setError(null);
+    
+    setLoading(true);
+    setError(null);
 
     try {
       const res = await sf.request<R>({ method, url, signal: controller.signal, ...opts });
-      if (state.current.mounted && !state.current.completed) {
-        if (res.success) { setData(res.data as unknown as T ?? null); setError(null); }
-        else { setError(new SFError(res.error || "Failed", res.status)); setData(null); }
+      
+      if (mountedRef.current && !controller.signal.aborted) {
+        if (res.success) {
+          // FIX: Simplified type assertion
+          setData(res.data as T ?? null);
+          setError(null);
+        } else {
+          setError(new SFError(res.error || "Failed", res.status));
+          setData(null);
+        }
         setLoading(false);
       }
-      abortRef.current === controller && (abortRef.current = null);
-      state.current.completed = true;
+      
       return res;
     } catch (err: any) {
+      if (mountedRef.current && !controller.signal.aborted) {
+        setError(err instanceof SFError ? err : new SFError(err.message || "Failed", err.status));
+        setData(null);
+        setLoading(false);
+      }
+      
       if (err.name === "AbortError" || err.code === "ABORT_ERROR") {
-        abortRef.current === controller && (abortRef.current = null);
         return { success: false, error: "Aborted" } as SFResponse<R>;
       }
-      if (state.current.mounted && !state.current.completed) {
-        setError(err instanceof SFError ? err : new SFError(err.message || "Failed", err.status));
-        setData(null); setLoading(false);
-      }
-      abortRef.current === controller && (abortRef.current = null);
+      
       throw err;
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
     }
   }, []);
+
+  // Initialize array if needed for optimistic operations
+  const ensureArray = useCallback((currentData: T | null): T | null => {
+    if (currentData === null) {
+      return [] as unknown as T;
+    }
+    return currentData;
+  }, []);
+
+  // Optimistic Update Helpers
+  const optimisticUpdate = useCallback(<U = T>(
+    updater: (currentData: T | null) => T | null,
+    rollback?: () => void
+  ) => {
+    const previousData = data;
+    setData(updater(data));
+    
+    return {
+      rollback: () => setData(previousData),
+      commit: () => {}, // For consistency
+    };
+  }, [data]);
+
+  const optimisticAdd = useCallback(<U = T>(
+    newItem: U,
+    position: 'start' | 'end' = 'end'
+  ) => {
+    // FIX: Auto-initialize array if data is null
+    const currentData = data === null ? [] : data;
+    
+    if (!Array.isArray(currentData)) {
+      console.warn('optimisticAdd can only be used with array data');
+      return { rollback: () => {} };
+    }
+    
+    const previousData = data;
+    const newData = position === 'start' 
+      ? [newItem, ...currentData] as T
+      : [...currentData, newItem] as T;
+    
+    setData(newData);
+    
+    return {
+      rollback: () => setData(previousData),
+    };
+  }, [data]);
+
+  const optimisticRemove = useCallback((index: number | ((item: any) => boolean)) => {
+    // FIX: Auto-initialize array if data is null
+    const currentData = data === null ? [] : data;
+    
+    if (!Array.isArray(currentData)) {
+      console.warn('optimisticRemove can only be used with array data');
+      return { rollback: () => {} };
+    }
+    
+    const previousData = data;
+    const predicate = typeof index === 'function' ? index : (_item: any, i: number) => i === index;
+    const newData = currentData.filter((item, i) => !predicate(item, i)) as T;
+    
+    setData(newData);
+    
+    return {
+      rollback: () => setData(previousData),
+    };
+  }, [data]);
+
+  const optimisticUpdateItem = useCallback((
+    index: number | ((item: any) => boolean),
+    updater: (item: any) => any
+  ) => {
+    // FIX: Auto-initialize array if data is null
+    const currentData = data === null ? [] : data;
+    
+    if (!Array.isArray(currentData)) {
+      console.warn('optimisticUpdateItem can only be used with array data');
+      return { rollback: () => {} };
+    }
+    
+    const previousData = data;
+    const predicate = typeof index === 'function' ? index : (_item: any, i: number) => i === index;
+    
+    const newData = currentData.map((item, i) => 
+      predicate(item, i) ? updater(item) : item
+    ) as T;
+    
+    setData(newData);
+    
+    return {
+      rollback: () => setData(previousData),
+    };
+  }, [data]);
 
   const resetData = useCallback(() => setData(null), []);
   const resetError = useCallback(() => setError(null), []);
   const resetAll = useCallback(() => { setData(null); setError(null); setLoading(false); }, []);
   const cancel = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; }, []);
 
+  // Helper to initialize data as array
+  const initArray = useCallback(() => {
+    if (data === null) {
+      setData([] as unknown as T);
+    }
+    return data as T & any[];
+  }, [data]);
+
   return {
-    loading, data, error,
+    // State
+    loading, 
+    data, 
+    error,
+    
+    // State setters (for optimistic updates)
+    setData,
+    
+    // Derived state
     isError: !!error,
     isEmpty: !loading && !error && (!data || (Array.isArray(data) && !data.length)),
     isSuccess: !loading && !error && !!data,
+    
+    // CRUD operations
     execute,
     get: useCallback(<R = T>(u: string, o?: SFOptions) => execute<R>("GET", u, o), [execute]),
     post: useCallback(<R = T>(u: string, d?: any, o?: SFOptions) => execute<R>("POST", u, { ...o, data: d }), [execute]),
     put: useCallback(<R = T>(u: string, d?: any, o?: SFOptions) => execute<R>("PUT", u, { ...o, data: d }), [execute]),
     patch: useCallback(<R = T>(u: string, d?: any, o?: SFOptions) => execute<R>("PATCH", u, { ...o, data: d }), [execute]),
     delete: useCallback(<R = T>(u: string, o?: SFOptions) => execute<R>("DELETE", u, o), [execute]),
-    resetData, resetError, resetAll, cancel,
+    
+    // Optimistic update helpers
+    optimistic: {
+      update: optimisticUpdate,
+      add: optimisticAdd,
+      remove: optimisticRemove,
+      updateItem: optimisticUpdateItem,
+    },
+    
+    // Array helpers
+    initArray,
+    
+    // Reset functions
+    resetData, 
+    resetError, 
+    resetAll,
+    
+    // Cancel
+    cancel,
   };
 }
 
@@ -373,35 +564,34 @@ sf.interceptors.response.use(
 // ==================== HELPER API FACTORY ====================
 export const api = (baseURL: string) => ({
   get: async <T = any>(url: string, options?: SFOptions) => 
-    await sf.get<T>(`${baseURL}/${url}`, options),
+    await sf.get<T>(`${baseURL}/${url.replace(/^\//, '')}`, options),
   
   post: async <T = any>(url: string, data?: any, options?: SFOptions) => 
-    await sf.post<T>(`${baseURL}/${url}`, data, options),
+    await sf.post<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   put: async <T = any>(url: string, data?: any, options?: SFOptions) => 
-    await sf.put<T>(`${baseURL}/${url}`, data, options),
+    await sf.put<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   patch: async <T = any>(url: string, data?: any, options?: SFOptions) => 
-    await sf.patch<T>(`${baseURL}/${url}`, data, options),
+    await sf.patch<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   delete: async <T = any>(url: string, options?: SFOptions) => 
-    await sf.delete<T>(`${baseURL}/${url}`, options),
+    await sf.delete<T>(`${baseURL}/${url.replace(/^\//, '')}`, options),
   
-  // Convenience methods
   getAll: async <T = any>(url: string, options?: SFOptions) => 
-    await sf.get<T>(`${baseURL}/${url}`, options),
+    await sf.get<T>(`${baseURL}/${url.replace(/^\//, '')}`, options),
   
   postData: async <T = any>(url: string, data: any, options?: SFOptions) => 
-    await sf.post<T>(`${baseURL}/${url}`, data, options),
+    await sf.post<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   putData: async <T = any>(url: string, data: any, options?: SFOptions) => 
-    await sf.put<T>(`${baseURL}/${url}`, data, options),
+    await sf.put<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   patchData: async <T = any>(url: string, data: any, options?: SFOptions) => 
-    await sf.patch<T>(`${baseURL}/${url}`, data, options),
+    await sf.patch<T>(`${baseURL}/${url.replace(/^\//, '')}`, data, options),
   
   deleteData: async <T = any>(url: string, options?: SFOptions) => 
-    await sf.delete<T>(`${baseURL}/${url}`, options),
+    await sf.delete<T>(`${baseURL}/${url.replace(/^\//, '')}`, options),
 });
 
 // ==================== DEFAULT EXPORT ====================

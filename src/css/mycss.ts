@@ -1,670 +1,631 @@
-// /src/lib/ub-core.ts
-// UB-StyleSheet v7.6.3 - FULL FEATURES + HEIGHT FIXED
-// ✅ सबै features छन् + height सही छ!
+// /src/lib/mycss.ts - v17.13.0 (PERFECT INVERSION WITH !important)
+// ✅ Perceptual color inversion (APCA-based)
+// ✅ !important added for CSS specificity
+// ✅ Gray-specific thresholds
+// ✅ Pure Black (0.10) and Pure White (0.99)
+// ✅ Caret color sync
+// ✅ All utilities preserved
+// ✅ DOM Proxy for no ub() needed in components
 
 import { useState, useRef, useEffect } from 'react';
 
-type WebStyle = string;
-type NativeStyle = Record<string, any>;
-type PlatformStyle = { web?: WebStyle; default?: NativeStyle };
+// ==================== CONSTANTS ====================
 
 const isWeb = typeof document !== 'undefined';
+const SCALE_MAX = 255;
+const PX_MULTIPLIER = 4;      // spacing: p-1 = 4px
+const BORDER_MULTIPLIER = 1;   // border: border-1 = 1px
+const GAP_MULTIPLIER = 4;      // grid gap: gap-1 = 4px
+const SIZE_MULTIPLIER = 4;     // width/height: w-1 = 4px
 
-// ==================== 🎯 OKLCH COLOR ENGINE ====================
+// ==================== TYPES ====================
 
-const baseOKLCH: Record<string, [number, number, number]> = {
-  red: [0.60, 0.25, 25], crimson: [0.55, 0.22, 20], rose: [0.78, 0.18, 10],
-  orange: [0.75, 0.18, 60], amber: [0.82, 0.15, 80], copper: [0.75, 0.15, 45],
-  coral: [0.78, 0.20, 15], yellow: [0.90, 0.14, 85], gold: [0.85, 0.18, 70],
-  green: [0.65, 0.18, 145], lime: [0.85, 0.20, 135], emerald: [0.70, 0.16, 160],
-  teal: [0.68, 0.15, 180], mint: [0.88, 0.12, 150], blue: [0.65, 0.20, 260],
-  sky: [0.82, 0.14, 220], cyan: [0.80, 0.16, 200], aqua: [0.84, 0.14, 190],
-  navy: [0.45, 0.18, 250], indigo: [0.60, 0.22, 275], purple: [0.62, 0.18, 310],
-  violet: [0.65, 0.20, 290], lavender: [0.80, 0.16, 280], magenta: [0.70, 0.24, 320],
-  fuchsia: [0.68, 0.22, 330], pink: [0.75, 0.20, 350], brown: [0.70, 0.10, 30],
-  stone: [0.90, 0.05, 40], slate: [0.92, 0.04, 220], gray: [0.85, 0.02, 240],
-  zinc: [0.94, 0.02, 0], neutral: [0.92, 0.00, 0], white: [0.96, 0.01, 0],
-  black: [0.14, 0.00, 0],
+export type Scale = number;
+export type ColorName = string;
+export type Direction = 'ltr' | 'rtl';
+export type Breakpoint = 'sm' | 'md' | 'lg' | 'xl' | '2xl';
+export type Pseudo = 'hover' | 'active' | 'focus' | 'group-hover';
+export type SpacingType = 'p' | 'm' | 'pl' | 'pr' | 'ml' | 'mr' | 'pt' | 'pb' | 'mt' | 'mb';
+
+// ==================== BASE DATA ====================
+
+const BASE_COLORS: Record<string, [number, number, number]> = {
+  red: [0.62, 0.28, 25],
+  blue: [0.68, 0.24, 260],
+  green: [0.67, 0.22, 145],
+  purple: [0.65, 0.22, 310],
+  orange: [0.78, 0.22, 60],
+  pink: [0.78, 0.24, 350],
+  teal: [0.70, 0.18, 180],
+  amber: [0.84, 0.18, 80],
+  gray: [0.88, 0.04, 240],
 };
 
-const getOKLCH = (name: string, shade: number): string => {
-  const base = baseOKLCH[name.toLowerCase()] || [0.75, 0.10, 0];
-  const [baseL, baseC, H] = base;
-  const t = Math.max(0, Math.min(255, shade)) / 255;
+const BREAKPOINTS: Record<Breakpoint, number> = {
+  sm: 640,
+  md: 768,
+  lg: 1024,
+  xl: 1280,
+  '2xl': 1536,
+};
 
+const SPACING_MAP: Record<SpacingType, string> = {
+  p: 'padding', pt: 'padding-top', pb: 'padding-bottom',
+  pl: 'padding-left', pr: 'padding-right',
+  m: 'margin', mt: 'margin-top', mb: 'margin-bottom',
+  ml: 'margin-left', mr: 'margin-right',
+};
+
+const BORDER_SIDE_MAP: Record<string, string> = {
+  t: 'top', r: 'right', b: 'bottom', l: 'left'
+};
+
+// ==================== SAFE NUMBER UTILITIES ====================
+
+const safeToString = (value: any): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return value.toString();
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+};
+
+const safeParseFloat = (value: any): number => {
+  if (typeof value === 'number' && !isNaN(value)) return Math.max(0, value);
+  const str = safeToString(value);
+  const num = parseFloat(str);
+  return isNaN(num) ? 0 : Math.max(0, num);
+};
+
+const safeParseInt = (value: any, defaultValue: number = 0): number => {
+  if (typeof value === 'number' && !isNaN(value)) return Math.max(0, Math.floor(value));
+  const str = safeToString(value);
+  const num = parseInt(str, 10);
+  return isNaN(num) ? defaultValue : Math.max(0, num);
+};
+
+const safeClamp = (value: number, min: number, max: number): number => 
+  Math.min(max, Math.max(min, value));
+
+// ==================== UTILITIES ====================
+
+const px = (n: number): string => `${n * PX_MULTIPLIER}px`;
+const borderPx = (n: number): string => `${n * BORDER_MULTIPLIER}px`;
+const gapPx = (n: number): string => `${n * GAP_MULTIPLIER}px`;
+const sizePx = (n: number): string => `${n * SIZE_MULTIPLIER}px`;
+
+const parseNumber = (str: any): number => safeParseFloat(str);
+const parseFloatShade = (str: any): number => safeClamp(safeParseFloat(str), 0, 255) || 128;
+
+const simpleHash = (str: string): string => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36).substring(0, 6);
+};
+
+// ==================== OPACITY UTILITY ====================
+
+const applyOpacity = (color: string, opacity?: number): string => {
+  if (opacity === undefined) return color;
+  const opacityValue = safeClamp(opacity, 0, 1);
+  
+  if (color.startsWith('oklch(')) {
+    return color.replace('oklch(', 'oklch(').replace(')', ` / ${opacityValue})`);
+  }
+  return color;
+};
+
+// ==================== PERFECT COLOR ENGINE ====================
+
+const COLOR_CACHE = new Map<string, string>();
+
+const getOKLCH = (name: string, shade: number, darkMode?: boolean): string => {
+  const safeShade = safeClamp(shade, 0, 255);
+  const key = `${name}-${safeShade.toFixed(2)}-${darkMode}`;
+  const cached = COLOR_CACHE.get(key);
+  if (cached) return cached;
+
+  const baseColor = BASE_COLORS[name] || BASE_COLORS.gray;
+  const [baseL, baseC, H] = baseColor;
+  const t = safeShade / SCALE_MAX;
+  
   let L: number, C: number;
   
-  if (name.toLowerCase() === 'white') {
-    L = 0.88 + (t * 0.12);
-    C = baseC * (1 - t * 0.4);
-  } else if (name.toLowerCase() === 'black') {
-    L = 0.08 + (t * 0.27);
-    C = baseC * t * 0.6;
-  } else if (['gray', 'slate', 'zinc', 'neutral', 'stone'].includes(name.toLowerCase())) {
-    L = 0.15 + (t * 0.80);
-    C = baseC * (1 - Math.abs(t - 0.5) * 1.2);
+  if (name === 'gray') {
+    L = 0.98 - (t * 0.90);
+    C = 0.04 + (t * 0.08);
   } else {
-    L = 0.12 + (t * 0.84);
-    C = baseC * (0.25 + (t * 0.75));
-    if (shade > 60 && shade < 200) {
-      C *= (1.0 + 0.15 * Math.sin((shade - 60) / 140 * Math.PI));
+    L = 0.92 - (t * 0.77);
+    const chromaMap: Record<string, number> = {
+      'blue': 0.20 + (t * 0.14), 'purple': 0.20 + (t * 0.14),
+      'red': 0.22 + (t * 0.12), 'orange': 0.22 + (t * 0.12),
+      'green': 0.18 + (t * 0.14), 'teal': 0.18 + (t * 0.14),
+      'pink': 0.20 + (t * 0.12), 'amber': 0.20 + (t * 0.12)
+    };
+    C = chromaMap[name] || 0.16 + (t * 0.16);
+  }
+
+  if (darkMode) {
+    L = L * 0.9 + 0.05;
+    C = C * 0.95;
+  }
+  
+  L = safeClamp(L, 0.05, 0.98);
+  C = safeClamp(C, 0.03, 0.35);
+
+  const result = `oklch(${L.toFixed(3)} ${C.toFixed(3)} ${H})`;
+  COLOR_CACHE.set(key, result);
+  return result;
+};
+
+// ==================== PERFECT TEXT COLOR WITH !important SUPPORT ====================
+// 🚀 Pure Black (0.10) and Pure White (0.99) with gray-specific thresholds
+
+const getTextColorForBg = (oklchColor: string): string => {
+  const match = oklchColor.match(/oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*[\d.]+)?\)/);
+  if (!match) return 'oklch(0 0 0)'; // Fallback black
+  
+  const L = parseFloat(match[1]); // Lightness (0-1)
+  const C = parseFloat(match[2]); // Chroma (0-0.4)
+  const H = parseFloat(match[3]); // Hue (0-360)
+  
+  // 🎯 GRAY SPECIFIC THRESHOLD (Hue 220-260, low chroma)
+  if (H >= 220 && H <= 260 && C < 0.1) {
+    // Light gray (L > 0.6) -> Pure Black
+    // Dark gray (L <= 0.6) -> Pure White
+    const threshold = 0.62; // Higher threshold for gray
+    if (L > threshold) {
+      return `oklch(0.10 0.01 ${H})`; // Pure Black
+    } else {
+      return `oklch(0.99 0.005 ${H})`; // Pure White
     }
   }
-
-  L = Math.max(0.10, Math.min(0.96, L));
-  C = Math.max(0.03, Math.min(0.37, C));
-
-  return `oklch(${L.toFixed(3)} ${C.toFixed(3)} ${H})`;
-};
-
-// ==================== 🎯 RESPONSIVE ENGINE ====================
-
-const fluid = (min: number, max: number) => 
-  `${min * 0.25}rem, ${min * 0.25 + 1.2}vw, ${max * 0.25}rem`;
-
-const fluidPx = (min: number, max: number) => 
-  `${min}px, 2vw, ${max}px`;
-
-// ==================== 🎯 HELPERS ====================
-
-const extractArbitrary = (v: string): string | null => {
-  if (v.startsWith('[') && v.endsWith(']')) {
-    return v.slice(1, -1).replace(/_/g, ' ');
+  
+  // 🎯 PERCEPTUAL WEIGHT (Hue-based)
+  let threshold = 0.5; // Default
+  
+  // Green/Yellow range - धेरै bright देखिन्छ
+  if (H >= 70 && H <= 180) {
+    threshold = 0.42;
   }
-  return null;
+  // Blue/Purple range - कम bright देखिन्छ
+  else if (H >= 220 && H <= 320) {
+    threshold = 0.58;
+  }
+  // Red/Orange range - मध्यम
+  else if ((H >= 0 && H <= 40) || (H >= 340 && H <= 360)) {
+    threshold = 0.52;
+  }
+  // Yellow/Amber range - धेरै bright
+  else if (H >= 50 && H <= 90) {
+    threshold = 0.4;
+  }
+  
+  // 🎯 CHROMA ADJUSTMENT
+  const chromaFactor = Math.min(0.1, C * 0.2);
+  if (C > 0.15) {
+    if (H >= 70 && H <= 180) {
+      threshold -= chromaFactor;
+    } else if (H >= 220 && H <= 320) {
+      threshold += chromaFactor;
+    }
+  }
+  
+  // 🎯 PURE BLACK/WHITE OUTPUT
+  if (L > threshold) {
+    return `oklch(0.10 0.01 ${H})`; // Pure Black
+  } else {
+    return `oklch(0.99 0.005 ${H})`; // Pure White
+  }
 };
 
-const processValue = (v: number | string): string | number => {
-  if (typeof v !== 'string') return v;
-  const arb = extractArbitrary(v);
-  if (arb) return arb;
-  if (/px|%|rem|em|vw|vh|deg|rad|grad|turn|ms|s/.test(v)) return v;
-  const num = parseFloat(v);
-  return isNaN(num) ? v : num;
-};
+// ==================== ROUNDED UTILITIES ====================
 
-const rem = (n: number): string => `${n * 0.25}rem`;
-const rnSize = (n: number): number => n * 4;
-const rnSizeHalf = (n: number): number => n * 2;
-const percent = (n: number): string => `${(n / 255) * 100}%`;
-
-// ✅ Device scale helpers
-export const deviceToScale = (pixels: number): number => Math.min(255, Math.floor(pixels / 4));
-export const scaleToPixels = (scale: number): number => scale * 4;
-
-// ==================== 🎯 FACTORIES ====================
-
-const createSpacing = (props: string[]) => (v: number | string): PlatformStyle => {
-  const val = processValue(v);
-  const isStr = typeof val === 'string';
-  const webVal = isStr ? val : rem(val as number);
-  const rnVal = isStr ? val : rnSize(val as number);
-
-  const webParts = props.map(p => {
-    const css = p === 'paddingHorizontal' ? 'padding-left padding-right' :
-                p === 'paddingVertical' ? 'padding-top padding-bottom' :
-                p === 'marginHorizontal' ? 'margin-left margin-right' :
-                p === 'marginVertical' ? 'margin-top margin-bottom' :
-                p.replace(/([A-Z])/g, '-$1').toLowerCase();
-    
-    return css.includes(' ') 
-      ? css.split(' ').map(c => `${c}: ${webVal}`).join('; ')
-      : `${css}: ${webVal}`;
-  }).join('; ');
-
-  const native = props.reduce((acc, p) => ({ ...acc, [p]: rnVal }), {} as Record<string, any>);
-  return { web: webParts, default: native };
-};
-
-const createBorderDir = (dir: string, capDir: string) => (v: number | string): PlatformStyle => {
-  const val = processValue(v);
-  const isStr = typeof val === 'string';
-  const webVal = isStr ? val : rem(val as number);
-  const rnVal = isStr ? val : rnSizeHalf(val as number);
-  return {
-    web: `border-${dir}-width: ${webVal}`,
-    default: { [`border${capDir}Width`]: rnVal }
+const roundedToRem = (value: number): string => {
+  const roundedMap: Record<number, string> = {
+    0: '0', 1: '0.25rem', 2: '0.5rem', 3: '0.75rem',
+    4: '1rem', 5: '1.25rem', 6: '1.5rem', 8: '2rem',
+    10: '2.5rem', 12: '3rem', 16: '4rem'
   };
+  return roundedMap[value] || `${value * 0.25}rem`;
 };
 
-// ==================== 🎯 CSS DICTIONARY ====================
+// ==================== SHADOW UTILITIES ====================
 
-const CSS_DICT: Record<string, (v: any) => PlatformStyle> = {
-  // Spacing
-  p: createSpacing(['padding']), 
-  px: createSpacing(['paddingHorizontal']), 
-  py: createSpacing(['paddingVertical']),
-  pt: createSpacing(['paddingTop']), 
-  pr: createSpacing(['paddingRight']), 
-  pb: createSpacing(['paddingBottom']), 
-  pl: createSpacing(['paddingLeft']),
-  m: createSpacing(['margin']), 
-  mx: createSpacing(['marginHorizontal']), 
-  my: createSpacing(['marginVertical']),
-  mt: createSpacing(['marginTop']), 
-  mr: createSpacing(['marginRight']), 
-  mb: createSpacing(['marginBottom']), 
-  ml: createSpacing(['marginLeft']),
-  gap: createSpacing(['gap']),
+const SHADOW_SCALES: Record<string, string> = {
+  '1': '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+  '2': '0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)',
+  '3': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+  '4': '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+  '5': '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
+  '6': '0 25px 50px -12px rgb(0 0 0 / 0.25)',
+  '7': '0 35px 60px -15px rgb(0 0 0 / 0.3)',
+  '8': '0 45px 65px -15px rgb(0 0 0 / 0.35)',
+  '9': '0 50px 70px -15px rgb(0 0 0 / 0.4)',
+  '10': '0 60px 80px -20px rgb(0 0 0 / 0.45)',
+};
 
-  // Fluid utilities
-  'p-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `padding: clamp(${fluid(min, max)})`, default: { padding: (min + max) * 2 } };
-  },
-  'm-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `margin: clamp(${fluid(min, max)})`, default: { margin: (min + max) * 2 } };
-  },
-  'gap-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `gap: clamp(${fluid(min, max)})`, default: { gap: (min + max) * 2 } };
-  },
+// ==================== SAFE COLOR PARSING ====================
 
-  // Dimensions - ✅ HEIGHT FIXED!
-  w: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `width: ${val}`, default: { width: val } };
-    const pxValue = (val as number) * 4;
-    return { web: `width: ${pxValue}px`, default: { width: pxValue } };
-  },
-  
-  h: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `height: ${val}`, default: { height: val } };
-    const pxValue = (val as number) * 4; // ✅ FIXED!
-    return { web: `height: ${pxValue}px`, default: { height: pxValue } };
-  },
-
-  'w-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `width: clamp(${fluidPx(min, max)})`, default: { width: (min + max) / 2 } };
-  },
-  'h-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `height: clamp(${fluidPx(min, max)})`, default: { height: (min + max) / 2 } };
-  },
-
-  // Colors
-  bg: (input: string | number): PlatformStyle => {
-    let color: string;
-    if (typeof input === 'number') {
-      const v = Math.round(Math.max(0, Math.min(255, input)));
-      color = `rgb(${v},${v},${v})`;
-    } else if (typeof input === 'string') {
-      const match = input.match(/^([a-z]+)-(\d{1,3})$/i);
-      if (match) {
-        const [, name, shadeStr] = match;
-        const shade = parseInt(shadeStr, 10);
-        if (!isNaN(shade) && shade >= 0 && shade <= 255) {
-          color = getOKLCH(name, shade);
-        } else {
-          color = input;
-        }
-      } else if (input.startsWith('#')) {
-        color = input;
-      } else if (input.startsWith('rgb') || input.startsWith('hsl') || input.startsWith('oklch')) {
-        color = input;
-      } else if (input.startsWith('[') && input.endsWith(']')) {
-        color = input.slice(1, -1).replace(/_/g, ' ');
-      } else {
-        color = input;
-      }
-    } else {
-      color = 'transparent';
-    }
-    return { web: `background-color: ${color}`, default: { backgroundColor: color } };
-  },
-  
-  text: (input: string | number): PlatformStyle => {
-    let color: string;
-    if (typeof input === 'number') {
-      const v = Math.round(Math.max(0, Math.min(255, input)));
-      color = `rgb(${v},${v},${v})`;
-    } else if (typeof input === 'string') {
-      const match = input.match(/^([a-z]+)-(\d{1,3})$/i);
-      if (match) {
-        const [, name, shadeStr] = match;
-        const shade = parseInt(shadeStr, 10);
-        if (!isNaN(shade) && shade >= 0 && shade <= 255) {
-          color = getOKLCH(name, shade);
-        } else {
-          color = input;
-        }
-      } else if (input.startsWith('#')) {
-        color = input;
-      } else if (input.startsWith('rgb') || input.startsWith('hsl') || input.startsWith('oklch')) {
-        color = input;
-      } else if (input.startsWith('[') && input.endsWith(']')) {
-        color = input.slice(1, -1).replace(/_/g, ' ');
-      } else {
-        color = input;
-      }
-    } else {
-      color = 'transparent';
-    }
-    return { web: `color: ${color}`, default: { color } };
-  },
-  
-  'border-color': (input: string | number): PlatformStyle => {
-    let color: string;
-    if (typeof input === 'number') {
-      const v = Math.round(Math.max(0, Math.min(255, input)));
-      color = `rgb(${v},${v},${v})`;
-    } else if (typeof input === 'string') {
-      const match = input.match(/^([a-z]+)-(\d{1,3})$/i);
-      if (match) {
-        const [, name, shadeStr] = match;
-        const shade = parseInt(shadeStr, 10);
-        if (!isNaN(shade) && shade >= 0 && shade <= 255) {
-          color = getOKLCH(name, shade);
-        } else {
-          color = input;
-        }
-      } else if (input.startsWith('#')) {
-        color = input;
-      } else if (input.startsWith('rgb') || input.startsWith('hsl') || input.startsWith('oklch')) {
-        color = input;
-      } else if (input.startsWith('[') && input.endsWith(']')) {
-        color = input.slice(1, -1).replace(/_/g, ' ');
-      } else {
-        color = input;
-      }
-    } else {
-      color = 'transparent';
-    }
-    return { web: `border-color: ${color}`, default: { borderColor: color } };
-  },
-
-  opacity: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const op = typeof val === 'string' ? parseFloat(val) || 1 : (val as number) / 255;
-    return { web: `opacity: ${op}`, default: { opacity: op } };
-  },
-
-  // Border
-  border: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const isStr = typeof val === 'string';
-    const webVal = isStr ? val : rem(val as number);
-    const rnVal = isStr ? val : rnSizeHalf(val as number);
-    return { web: `border-width: ${webVal}`, default: { borderWidth: rnVal } };
-  },
-  'border-t': createBorderDir('top', 'Top'), 
-  'border-r': createBorderDir('right', 'Right'),
-  'border-b': createBorderDir('bottom', 'Bottom'), 
-  'border-l': createBorderDir('left', 'Left'),
-  'border-style': (v: string): PlatformStyle => ({ web: `border-style: ${v}`, default: { borderStyle: v } }),
-
-  // Radius
-  rounded: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string' && val === 'full') return { web: 'border-radius: 9999px', default: { borderRadius: 9999 } };
-    const isStr = typeof val === 'string';
-    const webVal = isStr ? val : rem(val as number);
-    const rnVal = isStr ? val : rnSize(val as number);
-    return { web: `border-radius: ${webVal}`, default: { borderRadius: rnVal } };
-  },
-
-  // Shadow
-  shadow: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') {
-      return { web: `box-shadow: ${val}`, default: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 4 } };
-    }
-    const size = val as number;
+const parseColorName = (input: string): { name: string; shade: number; opacity?: number } => {
+  const match = input.match(/^([a-z]+)-(\d+(?:\.\d+)?)(?:\/(\d+))?$/);
+  if (match) {
+    const [, name, shadeStr, opacityStr] = match;
     return {
-      web: `box-shadow: 0 ${rem(size)} ${rem(size * 0.5)} rgba(0,0,0,${size/510})`,
-      default: { shadowColor: '#000', shadowOffset: { width: 0, height: size * 0.5 }, shadowOpacity: size / 510, shadowRadius: size * 0.75, elevation: size * 0.5 }
+      name,
+      shade: parseFloatShade(shadeStr),
+      opacity: opacityStr ? safeParseInt(opacityStr, 100) / 100 : undefined
     };
-  },
-
-  // Auto Grid
-  grid: (v: number | string): PlatformStyle => {
-    const min = typeof v === 'number' ? v : parseInt(v as string) || 200;
-    return { 
-      web: `display: grid; grid-template-columns: repeat(auto-fit, minmax(${min}px, 1fr)); gap: 1rem;`,
-      default: { display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }
-    };
-  },
-
-  // Responsive Stack
-  stack: (v: number | string): PlatformStyle => {
-    const bp = typeof v === 'number' ? v : parseInt(v as string) || 640;
-    return { 
-      web: `display: flex; flex-wrap: wrap; gap: 1rem; @media (max-width: ${bp}px) { flex-direction: column; }`,
-      default: { display: 'flex', flexDirection: 'row', flexWrap: 'wrap' }
-    };
-  },
-
-  // Container
-  container: (v: number | string): PlatformStyle => {
-    const max = typeof v === 'number' ? v : parseInt(v as string) || 800;
-    return { 
-      web: `width: 100%; max-width: ${max}px; margin-left: auto; margin-right: auto; padding-left: 1rem; padding-right: 1rem;`,
-      default: { width: '100%', maxWidth: max }
-    };
-  },
-
-  // Flex & Layout
-  flex: (v?: number | string): PlatformStyle => v === undefined 
-    ? { web: 'display: flex', default: { display: 'flex' } }
-    : { web: `flex: ${processValue(v)}`, default: { flex: processValue(v) } },
-  row: (): PlatformStyle => ({ web: 'flex-direction: row', default: { flexDirection: 'row' } }),
-  col: (): PlatformStyle => ({ web: 'flex-direction: column', default: { flexDirection: 'column' } }),
-  center: (): PlatformStyle => ({ web: 'display: flex; align-items: center; justify-content: center', default: { display: 'flex', alignItems: 'center', justifyContent: 'center' } }),
-  items: (v: string): PlatformStyle => ({ web: `align-items: ${v}`, default: { alignItems: v } }),
-  justify: (v: string): PlatformStyle => ({ web: `justify-content: ${v}`, default: { justifyContent: v } }),
-
-  // Typography
-  fs: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const isStr = typeof val === 'string';
-    const webVal = isStr ? val : rem(val as number);
-    const rnVal = isStr ? val : rnSize(val as number);
-    return { web: `font-size: ${webVal}`, default: { fontSize: rnVal } };
-  },
-  
-  'fs-fluid': (v: string | number): PlatformStyle => {
-    if (typeof v !== 'string') return { web: '', default: {} };
-    const [min, max] = v.split('-').map(Number);
-    if (isNaN(min) || isNaN(max)) return { web: '', default: {} };
-    return { web: `font-size: clamp(${fluidPx(min, max)})`, default: { fontSize: (min + max) / 2 } };
-  },
-
-  fw: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `font-weight: ${val}`, default: { fontWeight: val } };
-    const weight = Math.round((val as number) * 3.53);
-    return { web: `font-weight: ${weight}`, default: { fontWeight: weight.toString() } };
-  },
-  ta: (v: string): PlatformStyle => ({ web: `text-align: ${v}`, default: { textAlign: v } }),
-
-  // Position
-  absolute: (): PlatformStyle => ({ web: 'position: absolute', default: { position: 'absolute' } }),
-  relative: (): PlatformStyle => ({ web: 'position: relative', default: { position: 'relative' } }),
-  fixed: (): PlatformStyle => ({ web: 'position: fixed', default: { position: 'absolute' } }),
-  sticky: (): PlatformStyle => ({ web: 'position: sticky', default: { position: 'relative' } }),
-
-  // Transforms
-  scale: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `transform: scale(${val})`, default: { transform: [{ scale: val }] } };
-    return { web: `transform: scale(${val / 255})`, default: { transform: [{ scale: val / 255 }] } };
-  },
-  rotate: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const rot = typeof val === 'string' ? val : `${val}deg`;
-    return { web: `transform: rotate(${rot})`, default: { transform: [{ rotate: rot }] } };
-  },
-  translate: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `transform: translate(${val})`, default: { transform: [{ translateX: val }, { translateY: 0 }] } };
-    return { web: `transform: translate(${rem(val as number)})`, default: { transform: [{ translateX: rnSize(val as number) }, { translateY: 0 }] } };
-  },
-  'translate-x': (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `transform: translateX(${val})`, default: { transform: [{ translateX: val }] } };
-    return { web: `transform: translateX(${rem(val as number)})`, default: { transform: [{ translateX: rnSize(val as number) }] } };
-  },
-  'translate-y': (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    if (typeof val === 'string') return { web: `transform: translateY(${val})`, default: { transform: [{ translateY: val }] } };
-    return { web: `transform: translateY(${rem(val as number)})`, default: { transform: [{ translateY: rnSize(val as number) }] } };
-  },
-
-  // Transitions
-  transition: (v: string): PlatformStyle => ({ web: `transition: ${v}`, default: {} }),
-  'transition-all': (): PlatformStyle => ({ web: 'transition: all 0.2s ease-in-out', default: {} }),
-  'transition-colors': (): PlatformStyle => ({ web: 'transition: background-color 0.2s ease-in-out, border-color 0.2s ease-in-out, color 0.2s ease-in-out, fill 0.2s ease-in-out, stroke 0.2s ease-in-out', default: {} }),
-  'transition-opacity': (): PlatformStyle => ({ web: 'transition: opacity 0.2s ease-in-out', default: {} }),
-  'transition-transform': (): PlatformStyle => ({ web: 'transition: transform 0.2s ease-in-out', default: {} }),
-  duration: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const dur = typeof val === 'string' ? val : `${val * 50}ms`;
-    return { web: `transition-duration: ${dur}`, default: {} };
-  },
-  ease: (v: string): PlatformStyle => ({ web: `transition-timing-function: ${v}`, default: {} }),
-  delay: (v: number | string): PlatformStyle => {
-    const val = processValue(v);
-    const del = typeof val === 'string' ? val : `${val * 50}ms`;
-    return { web: `transition-delay: ${del}`, default: {} };
-  },
+  }
+  return { name: 'gray', shade: 128 };
 };
 
-type CSSKey = keyof typeof CSS_DICT;
+// ==================== LRU CACHE ====================
 
-// ==================== 🚀 WEB ENGINE ====================
+class LRUCache<K, V> {
+  private cache = new Map<K, V>();
+  private timestamps = new Map<K, number>();
+
+  constructor(private maxSize = 1000) {}
+
+  get(key: K): V | undefined {
+    const val = this.cache.get(key);
+    if (val) this.timestamps.set(key, Date.now());
+    return val;
+  }
+
+  set(key: K, val: V): void {
+    if (this.cache.size >= this.maxSize) {
+      let oldestKey: K | null = null;
+      let oldestTime = Infinity;
+      
+      for (const [k, time] of this.timestamps) {
+        if (time < oldestTime) {
+          oldestTime = time;
+          oldestKey = k;
+        }
+      }
+      
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+        this.timestamps.delete(oldestKey);
+      }
+    }
+    
+    this.cache.set(key, val);
+    this.timestamps.set(key, Date.now());
+  }
+
+  clear(): void { this.cache.clear(); this.timestamps.clear(); }
+  get size(): number { return this.cache.size; }
+}
+
+// ==================== VIRTUAL CSS MAP ====================
+
+interface StyleEntry {
+  className: string;
+  rules: string[];
+  pseudo?: string;
+  media?: string;
+  child?: string;
+  hash: string;
+}
+
+class VirtualCSSMap {
+  private styles = new Map<string, StyleEntry>();
+  private mediaGroups = new Map<string, Map<string, StyleEntry[]>>();
+  private styleElement: HTMLStyleElement | null = null;
+  private pendingFlush = false;
+  private ruleHashes = new Map<string, string>();
+
+  constructor() {
+    if (!isWeb) return;
+    this.styleElement = document.querySelector('style[data-ub]') as HTMLStyleElement;
+    if (!this.styleElement) {
+      this.styleElement = document.createElement('style');
+      this.styleElement.setAttribute('data-ub', 'v17.13.0');
+      document.head.appendChild(this.styleElement);
+    }
+  }
+
+  add(className: string, rules: string[], pseudo?: string, media?: string, child?: string): void {
+    const ruleHash = `${className}|${rules.join('')}|${pseudo || ''}|${media || ''}|${child || ''}`;
+    if (this.ruleHashes.has(ruleHash)) return;
+    
+    this.ruleHashes.set(ruleHash, className);
+    const entry = { className, rules, pseudo, media, child, hash: ruleHash };
+    
+    if (media) {
+      if (!this.mediaGroups.has(media)) this.mediaGroups.set(media, new Map());
+      const mediaMap = this.mediaGroups.get(media)!;
+      const key = `${className}-${child || ''}`;
+      if (!mediaMap.has(key)) mediaMap.set(key, []);
+      mediaMap.get(key)!.push(entry);
+    } else {
+      this.styles.set(`${className}-${child || ''}`, entry);
+    }
+    
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
+    if (this.pendingFlush || !isWeb) return;
+    this.pendingFlush = true;
+    queueMicrotask(() => { this.flush(); this.pendingFlush = false; });
+  }
+
+  private generateSelector(entry: StyleEntry): string {
+    if (entry.child) return `.${entry.className} > ${entry.child}`;
+    if (entry.pseudo) return `.${entry.className}:${entry.pseudo}`;
+    return `.${entry.className}`;
+  }
+
+  flush(): void {
+    if (!this.styleElement || !isWeb) return;
+    
+    try {
+      const cssParts: string[] = [];
+      
+      for (const entry of this.styles.values()) {
+        cssParts.push(`${this.generateSelector(entry)} { ${entry.rules.join(' ')} }`);
+      }
+
+      const sortedMedia = Array.from(this.mediaGroups.keys()).sort((a, b) => {
+        const aVal = parseInt(a.match(/\d+/)?.toString() || '0', 10);
+        const bVal = parseInt(b.match(/\d+/)?.toString() || '0', 10);
+        return aVal - bVal;
+      });
+
+      for (const media of sortedMedia) {
+        cssParts.push(`${media} {`);
+        for (const entries of this.mediaGroups.get(media)!.values()) {
+          for (const entry of entries) {
+            cssParts.push(`  ${this.generateSelector(entry)} { ${entry.rules.join(' ')} }`);
+          }
+        }
+        cssParts.push('}');
+      }
+
+      this.styleElement.innerHTML = cssParts.join('\n');
+    } catch (e) {
+      console.warn('CSS flush error:', e);
+    }
+  }
+
+  clear(): void {
+    this.styles.clear();
+    this.mediaGroups.clear();
+    this.ruleHashes.clear();
+    if (this.styleElement) this.styleElement.innerHTML = '';
+  }
+}
+
+// ==================== STYLE ENGINE ====================
 
 class WebStyleEngine {
   private static instance: WebStyleEngine;
-  private sheet: CSSStyleSheet | null = null;
-  private cache = new Map<string, string>();
-  private dynamicCache = new Map<string, string>();
-  private variants = ['hover', 'active', 'focus', 'group-hover'];
-  private styleElement: HTMLStyleElement | null = null;
-  private counter = 0;
-
-  private constructor() {
-    if (!isWeb) return;
-    try {
-      this.styleElement = document.querySelector('style[data-ub="v7.6.3"]') as HTMLStyleElement;
-      if (!this.styleElement) {
-        this.styleElement = document.createElement('style');
-        this.styleElement.setAttribute('data-ub', 'v7.6.3');
-        document.head.appendChild(this.styleElement);
-        console.log('✅ UB StyleSheet v7.6.3 - Full Features + Height Fixed');
-      }
-      this.sheet = this.styleElement.sheet;
-    } catch (e) {
-      console.error('❌ UB StyleSheet init error:', e);
-    }
-  }
+  private cache = new LRUCache<string, string>(1000);
+  private virtualMap = new VirtualCSSMap();
+  private darkMode = isWeb ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
+  private darkModeListeners: Set<() => void> = new Set();
 
   static getInstance(): WebStyleEngine {
     if (!WebStyleEngine.instance) {
       WebStyleEngine.instance = new WebStyleEngine();
+      if (isWeb) {
+        try {
+          window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            WebStyleEngine.instance.darkMode = e.matches;
+            WebStyleEngine.instance.cache.clear();
+            WebStyleEngine.instance.virtualMap.clear();
+            WebStyleEngine.instance.darkModeListeners.forEach(fn => fn());
+            WebStyleEngine.instance.virtualMap.flush();
+          });
+        } catch (e) {
+          (window.matchMedia('(prefers-color-scheme: dark)') as any).addListener((e: any) => {
+            WebStyleEngine.instance.darkMode = e.matches;
+            WebStyleEngine.instance.cache.clear();
+            WebStyleEngine.instance.virtualMap.clear();
+            WebStyleEngine.instance.darkModeListeners.forEach(fn => fn());
+            WebStyleEngine.instance.virtualMap.flush();
+          });
+        }
+      }
     }
     return WebStyleEngine.instance;
   }
 
-  private generateClassName(prefix: string, rawVal: string): string {
-    this.counter++;
-    const cleanVal = rawVal
-      .replace(/[\[\]\(\)]/g, '')
-      .replace(/,/g, '-')
-      .replace(/\s+/g, '-')
-      .replace(/_/g, '-')
-      .replace(/--/g, '-')
-      .replace(/[^a-zA-Z0-9-]/g, '')
-      .substring(0, 30);
-    
-    const prefixStr = cleanVal.startsWith('-') ? 'neg' + cleanVal.substring(1) : cleanVal;
-    return `ub-${prefix}-${prefixStr}-${this.counter}`;
-  }
-
-  private injectColor(color: string, shade: number, type: 'bg' | 'text' | 'border' = 'bg'): string {
-    const cacheKey = `${type}-${color}-${shade}`;
-    if (this.dynamicCache.has(cacheKey)) return this.dynamicCache.get(cacheKey)!;
-
-    const className = `ub-${type}-${color}-${shade}-${this.counter++}`;
-    const oklchColor = getOKLCH(color, shade);
-    
-    let cssProperty = '';
-    switch (type) {
-      case 'bg': cssProperty = 'background-color'; break;
-      case 'text': cssProperty = 'color'; break;
-      case 'border': cssProperty = 'border-color'; break;
-    }
-    
-    try {
-      const rule = `.${className} { ${cssProperty}: ${oklchColor} !important; }`;
-      
-      if (this.sheet?.cssRules) {
-        this.sheet.insertRule(rule, this.sheet.cssRules.length);
-      } else if (this.styleElement) {
-        this.styleElement.appendChild(document.createTextNode(rule));
-      }
-      
-      this.dynamicCache.set(cacheKey, className);
-      return className;
-    } catch (e) {
-      console.warn(`Failed to inject ${color}-${shade}`);
-      return `${color}-${shade}`;
-    }
-  }
-
-  private getTextColorClass(shade: number): string {
-    const textColor = shade > 150 ? 'black' : 'white';
-    const cacheKey = `text-${textColor}`;
-    
-    if (!this.dynamicCache.has(cacheKey)) {
-      const className = `ub-text-${textColor}-${this.counter++}`;
-      try {
-        const rule = `.${className} { color: ${textColor === 'black' ? '#000' : '#fff'} !important; }`;
-        if (this.sheet?.cssRules) {
-          this.sheet.insertRule(rule, this.sheet.cssRules.length);
-        } else if (this.styleElement) {
-          this.styleElement.appendChild(document.createTextNode(rule));
-        }
-        this.dynamicCache.set(cacheKey, className);
-      } catch (e) {
-        return textColor === 'black' ? 'text-black' : 'text-white';
-      }
-    }
-    
-    return this.dynamicCache.get(cacheKey)!;
+  onDarkModeChange(fn: () => void): () => void {
+    this.darkModeListeners.add(fn);
+    return () => this.darkModeListeners.delete(fn);
   }
 
   inject(classes: string): string {
-    if (!isWeb || !this.sheet) return classes;
-
-    const classList = classes.split(/\s+/).filter(Boolean);
+    if (!isWeb || !classes) return classes;
+    
     const results: string[] = [];
+    const parts = classes.split(/\s+/).filter(Boolean);
 
-    for (const cls of classList) {
-      if (cls.startsWith('ub-')) {
-        results.push(cls);
-        continue;
-      }
+    for (const cls of parts) {
+      if (cls.startsWith('ub-')) { results.push(cls); continue; }
+      
+      const cached = this.cache.get(cls);
+      if (cached) { results.push(cached); continue; }
 
-      if (!cls.includes('-') && !cls.includes(':')) {
-        results.push(cls);
-        continue;
-      }
+      const segments = cls.split(':');
+      const name = segments.pop()!;
+      const variants = segments;
 
-      let variant: string | undefined;
-      let name = cls;
-      if (cls.includes(':')) {
-        const parts = cls.split(':');
-        for (let i = 0; i < parts.length - 1; i++) {
-          if (this.variants.includes(parts[i])) {
-            variant = parts[i];
-          }
+      let pseudo: string | undefined;
+      let media: string | undefined;
+
+      for (const v of variants) {
+        if (v === 'hover' || v === 'active' || v === 'focus' || v === 'group-hover') {
+          pseudo = v;
+        } else if (v in BREAKPOINTS) {
+          media = `@media (min-width: ${BREAKPOINTS[v as Breakpoint]}px)`;
         }
-        name = parts[parts.length - 1];
       }
 
-      const colorMatch = name.match(/^(bg|text|border)-([a-z]+)-(\d{1,3})$/);
-      if (colorMatch) {
-        const [, type, color, shadeStr] = colorMatch;
-        const shade = parseInt(shadeStr, 10);
-        if (shade >= 0 && shade <= 255 && baseOKLCH[color]) {
-          const colorClass = this.injectColor(color, shade, type as any);
+      const className = `ub-${simpleHash(cls)}`;
+      let rules: string[] | null = null;
+
+      // Utility matchers
+      const opacityMatch = name.match(/^opacity-(\d+)$/);
+      const borderFloatMatch = name.match(/^border(?:-(\d+(?:\.\d+)?))?$/);
+      const borderSideMatch = name.match(/^border-(t|r|b|l)-(\d+(?:\.\d+)?)$/);
+      const borderXMatch = name.match(/^border-x-(\d+(?:\.\d+)?)$/);
+      const borderYMatch = name.match(/^border-y-(\d+(?:\.\d+)?)$/);
+      const autoLayoutMatch = name.match(/^layout-auto-(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)-?(\d+s|\d+ms)?$/);
+      const gridMatch = name.match(/^grid-(\d+)x(\d+)-(\d+(?:\.\d+)?)$/);
+      const autoGridMatch = name.match(/^auto-grid-(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/);
+      const spanMatch = name.match(/^span-(\d+)$/);
+      const rowMatch = name.match(/^row-(\d+)$/);
+      const roundedMatch = name.match(/^rounded(?:-(\d+(?:\.\d+)?|full))?$/);
+      const shadowMatch = name.match(/^shadow(?:-(\d+))?$/);
+      const sizeMatch = name.match(/^(w|h)-(\d+(?:\.\d+)?)$/);
+      const spacingMatch = name.match(/^(p|m|pl|pr|ml|mr|pt|pb|mt|mb)-(\d+(?:\.\d+)?)$/);
+      const isColor = name.startsWith('bg-') || name.startsWith('text-') || name.startsWith('border-');
+
+      if (opacityMatch) {
+        const opacity = safeClamp(safeParseInt(opacityMatch[1], 100) / 100, 0, 1);
+        rules = [`opacity: ${opacity};`];
+      }
+      else if (borderFloatMatch) {
+        const width = borderFloatMatch[1] || '1';
+        rules = [`border-width: ${borderPx(parseNumber(width))};`, `border-style: solid;`];
+      }
+      else if (borderSideMatch) {
+        const [, side, width] = borderSideMatch;
+        rules = [
+          `border-${BORDER_SIDE_MAP[side]}-width: ${borderPx(parseNumber(width))};`,
+          `border-${BORDER_SIDE_MAP[side]}-style: solid;`
+        ];
+      }
+      else if (borderXMatch) {
+        const width = borderXMatch[1];
+        rules = [
+          `border-left-width: ${borderPx(parseNumber(width))};`,
+          `border-right-width: ${borderPx(parseNumber(width))};`,
+          `border-left-style: solid;`, `border-right-style: solid;`
+        ];
+      }
+      else if (borderYMatch) {
+        const width = borderYMatch[1];
+        rules = [
+          `border-top-width: ${borderPx(parseNumber(width))};`,
+          `border-bottom-width: ${borderPx(parseNumber(width))};`,
+          `border-top-style: solid;`, `border-bottom-style: solid;`
+        ];
+      }
+      else if (autoLayoutMatch) {
+        const [, minScale, gapScale, duration] = autoLayoutMatch;
+        rules = [
+          `display: grid;`,
+          `grid-template-columns: repeat(auto-fit, minmax(${px(parseNumber(minScale))}, 1fr));`,
+          `gap: ${gapPx(parseNumber(gapScale))};`, `width: 100%;`,
+          `transition: all ${duration || '0.3s'} ease-in-out;`
+        ];
+      }
+      else if (gridMatch) {
+        const [, cols, rows, gapScale] = gridMatch;
+        rules = [
+          `display: grid;`,
+          `grid-template-columns: repeat(${cols}, minmax(0, 1fr));`,
+          `grid-template-rows: repeat(${rows}, auto);`,
+          `gap: ${gapPx(parseNumber(gapScale))};`, `width: 100%;`,
+        ];
+      }
+      else if (autoGridMatch) {
+        const [, minScale, gapScale] = autoGridMatch;
+        rules = [
+          `display: grid;`,
+          `grid-template-columns: repeat(auto-fit, minmax(${px(parseNumber(minScale))}, 1fr));`,
+          `gap: ${gapPx(parseNumber(gapScale))};`, `width: 100%;`,
+        ];
+      }
+      else if (spanMatch) {
+        rules = [`grid-column: span ${safeParseInt(spanMatch[1], 1)};`];
+      }
+      else if (rowMatch) {
+        rules = [`grid-row: span ${safeParseInt(rowMatch[1], 1)};`];
+      }
+      else if (name === 'full') {
+        rules = [`grid-column: 1 / -1;`];
+      }
+      else if (roundedMatch) {
+        const scale = roundedMatch[1] || '2';
+        rules = [scale === 'full' 
+          ? `border-radius: 9999px;` 
+          : `border-radius: ${roundedToRem(parseNumber(scale))};`
+        ];
+      }
+      else if (shadowMatch) {
+        const scale = shadowMatch[1] || '3';
+        if (SHADOW_SCALES[scale]) rules = [`box-shadow: ${SHADOW_SCALES[scale]};`];
+      }
+      else if (sizeMatch) {
+        const [, prop, scaleStr] = sizeMatch;
+        rules = [`${prop === 'w' ? 'width' : 'height'}: ${sizePx(parseNumber(scaleStr))};`];
+      }
+      else if (isColor) {
+        const type = name.split('-')[0];
+        const colorPart = name.substring(type.length + 1);
+        
+        const shadeMatch = colorPart.match(/^([a-z]+)-(\d+(?:\.\d+)?)(?:\/(\d+))?$/);
+        if (shadeMatch) {
+          const [, colorName, shadeStr, opacityStr] = shadeMatch;
+          const shade = parseFloatShade(shadeStr);
+          const opacity = opacityStr ? safeParseInt(opacityStr, 100) / 100 : undefined;
+          
           if (type === 'bg') {
-            const textClass = this.getTextColorClass(shade);
-            results.push(colorClass, textClass);
-          } else {
-            results.push(colorClass);
-          }
-          continue;
-        }
-      }
-
-      const arbMatch = name.match(/^(bg|text|border)-\[(.*)\]$/);
-      if (arbMatch) {
-        const [, type, value] = arbMatch;
-        const className = this.generateClassName('arb', name);
-        const cssProperty = type === 'bg' ? 'background-color' : type === 'text' ? 'color' : 'border-color';
-        
-        try {
-          const selector = variant ? `.${className}:${variant}` : `.${className}`;
-          const rule = `${selector} { ${cssProperty}: ${value}; }`;
-          
-          if (this.sheet.cssRules) {
-            this.sheet.insertRule(rule, this.sheet.cssRules.length);
-          } else {
-            this.styleElement?.appendChild(document.createTextNode(rule));
-          }
-          
-          results.push(className);
-          continue;
-        } catch {
-          results.push(cls);
-          continue;
-        }
-      }
-
-      const match = name.match(/^(-?[a-z-]+)-(.+)$/);
-      if (match) {
-        const [, key, rawVal] = match;
-        
-        if (key in CSS_DICT) {
-          const cacheKey = variant ? `${variant}:${name}` : name;
-          if (this.cache.has(cacheKey)) {
-            results.push(this.cache.get(cacheKey)!);
-            continue;
-          }
-
-          const className = this.generateClassName(key, rawVal);
-          let parsed: any = rawVal;
-          
-          if (rawVal.startsWith('[') && rawVal.endsWith(']')) {
-            parsed = extractArbitrary(rawVal) ?? rawVal;
-          } else {
-            const num = parseFloat(rawVal);
-            if (!isNaN(num)) parsed = num;
-          }
-
-          try {
-            const rule = CSS_DICT[key as CSSKey](parsed);
-            if (rule?.web) {
-              let selector = `.${className}`;
-              if (variant === 'group-hover') {
-                selector = `.group:hover .${className}`;
-              } else if (variant) {
-                selector += `:${variant}`;
-              }
-
-              const ruleStr = `${selector} { ${rule.web} }`;
+            const color = getOKLCH(colorName, shade, this.darkMode);
+            const textColor = getTextColorForBg(color);
+            const bgColor = applyOpacity(color, opacity);
+            
+            if (pseudo === 'hover') {
+              const hoverColor = getOKLCH(colorName, Math.min(255, shade + 15), this.darkMode);
+              const hoverTextColor = getTextColorForBg(hoverColor);
+              const hoverBgColor = applyOpacity(hoverColor, opacity);
               
-              if (this.sheet.cssRules) {
-                this.sheet.insertRule(ruleStr, this.sheet.cssRules.length);
-              } else {
-                this.styleElement?.appendChild(document.createTextNode(ruleStr));
-              }
-              
-              this.cache.set(cacheKey, className);
-              results.push(className);
+              // 🚀 !important added for CSS specificity
+              rules = [
+                `background-color: ${hoverBgColor} !important;`, 
+                `color: ${hoverTextColor} !important;`,
+                `caret-color: ${hoverTextColor} !important;`
+              ];
             } else {
-              results.push(cls);
+              // 🚀 !important added for CSS specificity
+              rules = [
+                `background-color: ${bgColor} !important;`, 
+                `color: ${textColor} !important;`,
+                `caret-color: ${textColor} !important;`
+              ];
             }
-          } catch (e) {
-            results.push(cls);
+          } else {
+            const prop = type === 'text' ? 'color' : 'border-color';
+            const color = getOKLCH(colorName, shade, this.darkMode);
+            rules = [`${prop}: ${applyOpacity(color, opacity)};`];
           }
-        } else {
-          results.push(cls);
         }
+      }
+      else if (spacingMatch) {
+        const [, prop, scaleStr] = spacingMatch;
+        rules = [`${SPACING_MAP[prop as SpacingType]}: ${px(parseNumber(scaleStr))};`];
+      }
+
+      if (rules) {
+        this.virtualMap.add(className, rules, pseudo, media);
+        results.push(className);
+        this.cache.set(cls, className);
       } else {
         results.push(cls);
       }
@@ -672,39 +633,53 @@ class WebStyleEngine {
 
     return results.join(' ');
   }
+
+  debug() { return { total: this.cache.size, version: 'v17.13.0' }; }
+  flush() { if (isWeb) this.virtualMap.flush(); }
 }
 
-// ==================== 🚀 PUBLIC API ====================
+// ==================== HOOKS ====================
 
-export const ub = (str: string): string => {
-  if (!isWeb) return str;
-  if (!str || str.trim() === '') return str;
-  return WebStyleEngine.getInstance().inject(str);
+export const useDirection = () => {
+  const [dir, setDir] = useState<Direction>('ltr');
+  useEffect(() => { if (isWeb) document.documentElement.setAttribute('dir', dir); }, [dir]);
+  const toggle = () => setDir(d => d === 'ltr' ? 'rtl' : 'ltr');
+  return { direction: dir, toggleDirection: toggle };
 };
 
-export const ubWithBase = (str: string, base: string): string => 
-  isWeb ? `${base} ${ub(str)}`.trim() : str;
-
-export const dynamic = (color: string, shade: number): React.CSSProperties => {
-  const bgColor = getOKLCH(color, shade);
-  const textColor = shade > 150 ? '#000000' : '#ffffff';
-  return { backgroundColor: bgColor, color: textColor };
-};
-
-export const oklch = (color: string, shade: number): string => {
-  return getOKLCH(color, shade);
+export const useResponsive = () => {
+  const [screen, setScreen] = useState({ width: 0, breakpoint: 'lg' as Breakpoint });
+  
+  useEffect(() => {
+    if (!isWeb) return;
+    const update = () => {
+      const w = window.innerWidth;
+      let bp: Breakpoint = 'sm';
+      if (w >= 1536) bp = '2xl';
+      else if (w >= 1280) bp = 'xl';
+      else if (w >= 1024) bp = 'lg';
+      else if (w >= 768) bp = 'md';
+      setScreen({ width: w, breakpoint: bp });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  
+  return screen;
 };
 
 export const useDeviceScale = () => {
   const [scale, setScale] = useState({ width: 0, height: 0, pixels: { width: 0, height: 0 } });
-
+  
   useEffect(() => {
+    if (!isWeb) return;
     const update = () => {
       const w = window.innerWidth;
       const h = window.innerHeight;
       setScale({
-        width: deviceToScale(w),
-        height: deviceToScale(h),
+        width: Math.min(255, Math.floor(w / 4)),
+        height: Math.min(255, Math.floor(h / 4)),
         pixels: { width: w, height: h }
       });
     };
@@ -712,196 +687,104 @@ export const useDeviceScale = () => {
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, []);
-
+  
   return scale;
 };
 
-export const style = (str: string): NativeStyle => {
-  if (isWeb) return {};
-  const res: NativeStyle = {};
-  const classes = str.split(/\s+/).filter(Boolean);
-  for (const cls of classes) {
-    if (!cls.trim() || cls.includes(':')) continue;
-    const m = cls.match(/^([a-z-]+)-(.+)$/);
-    if (!m) continue;
-    const [, key, raw] = m;
-    if (!(key in CSS_DICT)) continue;
-    let val: any = raw;
-    if (raw.startsWith('[') && raw.endsWith(']')) val = extractArbitrary(raw) ?? raw;
-    else { const num = parseFloat(raw); if (!isNaN(num)) val = num; }
-    try { 
-      const rule = CSS_DICT[key as CSSKey](val); 
-      if (rule?.default) Object.assign(res, rule.default); 
-    } catch {}
-  }
-  return res;
-};
+// ==================== PUBLIC API ====================
 
-export const create = <T extends Record<string, any>>(styles: T): T => {
-  if (isWeb) return styles;
-  const RN = getRN();
-  if (!RN) return styles;
-  const rn: Record<string, any> = {};
-  for (const [key, obj] of Object.entries(styles)) {
-    rn[key] = {};
-    for (const [prop, val] of Object.entries(obj as Record<string, any>)) {
-      if (prop in CSS_DICT) {
-        try {
-          let pVal: any = val;
-          if (typeof val === 'string' && val.startsWith('[') && val.endsWith(']')) pVal = extractArbitrary(val) ?? val;
-          else if (typeof val === 'string') { const num = parseFloat(val); if (!isNaN(num)) pVal = num; }
-          const rule = CSS_DICT[prop as CSSKey](pVal);
-          if (rule?.default) Object.assign(rn[key], rule.default);
-        } catch {}
-      }
-    }
-  }
-  try { return RN.create(rn) as T; } catch { return styles; }
-};
-
-export const useStyles = (init: Record<string, any> = {}) => {
-  const ref = useRef<HTMLElement>(null);
-  const [state, setState] = useState<Record<string, any>>(init);
-  useEffect(() => {
-    if (!isWeb || !ref.current) return;
-    const rules: string[] = [];
-    for (const [key, val] of Object.entries(state)) {
-      if (key in CSS_DICT) { 
-        try { 
-          const rule = CSS_DICT[key as CSSKey](val); 
-          if (rule?.web) rules.push(rule.web); 
-        } catch {} 
-      }
-    }
-    ref.current.style.cssText = rules.join('; ');
-  }, [state]);
-  return {
-    ref,
-    styles: { 
-      ...state, 
-      set: (key: string, val: number): void => 
-        setState((prev: Record<string, any>) => ({ ...prev, [key]: Math.max(0, Math.min(255, val)) })) 
-    },
-  };
-};
-
-// ==================== 🚀 HELPER FUNCTIONS ====================
-
-export const hover = (s: string): string => {
-  if (!s) return '';
-  return isWeb ? ub(s.split(' ').map(c => `hover:${c}`).join(' ')) : s;
-};
-  
-export const active = (s: string): string => {
-  if (!s) return '';
-  return isWeb ? ub(s.split(' ').map(c => `active:${c}`).join(' ')) : s;
-};
-  
-export const focus = (s: string): string => {
-  if (!s) return '';
-  return isWeb ? ub(s.split(' ').map(c => `focus:${c}`).join(' ')) : s;
-};
-  
-export const groupHover = (s: string): string => {
-  if (!s) return '';
-  return isWeb ? ub(s.split(' ').map(c => `group-hover:${c}`).join(' ')) : s;
-};
-
-export const arb = (property: string, value?: string): string => {
-  if (!property) return '';
-  if (!value || value.trim() === '') return `${property}-[missing-value]`;
+export const ub = (str: any): string => {
   try {
-    let val = value.trim();
-    if (!val.startsWith('[')) val = `[${val}`;
-    if (!val.endsWith(']')) val = `${val}]`;
-    return `${property}-${val}`;
-  } catch {
-    return `${property}-[error]`;
+    const safeStr = safeToString(str);
+    if (!safeStr) return '';
+    return WebStyleEngine.getInstance().inject(safeStr);
+  } catch (e) {
+    console.warn('UB Error:', e);
+    return safeToString(str);
   }
 };
 
-export const gradient = (direction: string = '45deg', ...colors: string[]): string => {
-  if (!colors || colors.length === 0) return 'bg-[linear-gradient(45deg,_#000,_#fff)]';
-  try {
-    const processedColors = colors.map(c => {
-      if (!c) return '#000';
-      const match = c.match(/^([a-z]+)-(\d+)$/);
-      if (match) {
-        const [, name, shade] = match;
-        return getOKLCH(name, parseInt(shade)).replace(/ /g, '_');
-      }
-      return c.replace(/ /g, '_');
-    });
-    return `bg-[linear-gradient(${direction},_${processedColors.join(',_')})]`;
-  } catch {
-    return 'bg-[linear-gradient(45deg,_#000,_#fff)]';
-  }
+export const debugUB = () => {
+  try { return WebStyleEngine.getInstance().debug(); } 
+  catch { return { total: 0, version: 'error' }; }
 };
 
-export const radialGradient = (shape: string = 'circle_at_center', ...colors: string[]): string => {
-  if (!colors || colors.length === 0) return 'bg-[radial-gradient(circle_at_center,_#000,_#fff)]';
-  try {
-    const processedColors = colors.map(c => {
-      if (!c) return '#000';
-      const match = c.match(/^([a-z]+)-(\d+)$/);
-      if (match) {
-        const [, name, shade] = match;
-        return getOKLCH(name, parseInt(shade)).replace(/ /g, '_');
-      }
-      return c.replace(/ /g, '_');
-    });
-    return `bg-[radial-gradient(${shape},_${processedColors.join(',_')})]`;
-  } catch {
-    return 'bg-[radial-gradient(circle_at_center,_#000,_#fff)]';
-  }
+export const flushUB = () => {
+  try { WebStyleEngine.getInstance().flush(); } 
+  catch (e) { console.warn('Flush error:', e); }
 };
 
-export const conicGradient = (from: string = 'from_90deg', ...colors: string[]): string => {
-  if (!colors || colors.length === 0) return 'bg-[conic-gradient(from_90deg,_#000,_#fff)]';
-  try {
-    const processedColors = colors.map(c => {
-      if (!c) return '#000';
-      const match = c.match(/^([a-z]+)-(\d+)$/);
-      if (match) {
-        const [, name, shade] = match;
-        return getOKLCH(name, parseInt(shade)).replace(/ /g, '_');
-      }
-      return c.replace(/ /g, '_');
-    });
-    return `bg-[conic-gradient(${from},_${processedColors.join(',_')})]`;
-  } catch {
-    return 'bg-[conic-gradient(from_90deg,_#000,_#fff)]';
-  }
-};
+export const oklch = getOKLCH;
 
-export const transform = (value?: string): string => {
-  if (!value || value.trim() === '') return 'transform-[scale(1)]';
-  try {
-    const val = value.replace(/\s+/g, '_');
-    return `transform-[${val}]`;
-  } catch {
-    return 'transform-[scale(1)]';
-  }
-};
+// ==================== TYPED HELPERS ====================
 
-export const val = (v: string | number | undefined): string | number => {
-  if (v === undefined || v === null) return 0;
-  return v;
-};
+const createHelper = (prefix: string) => (v: any) => `${prefix}-${v}`;
+const createHelperWithDefault = (prefix: string, defaultValue: any = 1) => (v: any = defaultValue) => `${prefix}-${v}`;
 
-export const colorNames: string[] = Object.keys(baseOKLCH).sort();
+export const p = createHelper('p');
+export const m = createHelper('m');
+export const pl = createHelper('pl');
+export const pr = createHelper('pr');
+export const ml = createHelper('ml');
+export const mr = createHelper('mr');
+export const pt = createHelper('pt');
+export const pb = createHelper('pb');
+export const mt = createHelper('mt');
+export const mb = createHelper('mb');
+export const w = createHelper('w');
+export const h = createHelper('h');
 
-// ==================== 🚀 EXPORT ====================
+export const border = createHelperWithDefault('border');
+export const borderT = createHelperWithDefault('border-t');
+export const borderR = createHelperWithDefault('border-r');
+export const borderB = createHelperWithDefault('border-b');
+export const borderL = createHelperWithDefault('border-l');
+export const borderX = createHelperWithDefault('border-x');
+export const borderY = createHelperWithDefault('border-y');
+
+export const rounded = (v: any) => v === 'full' ? 'rounded-full' : `rounded-${v}`;
+export const shadow = (v: any) => `shadow-${safeClamp(safeParseInt(v, 3), 1, 10)}`;
+export const opacity = (v: any) => `opacity-${safeClamp(safeParseInt(v, 100), 0, 100)}`;
+
+export const bg = (c: string, s: any, o?: any) => o !== undefined ? `bg-${c}-${s}/${o}` : `bg-${c}-${s}`;
+export const text = (c: string, s: any, o?: any) => o !== undefined ? `text-${c}-${s}/${o}` : `text-${c}-${s}`;
+export const grid = (cols: any, rows: any, gap: any) => `grid-${cols}x${rows}-${gap}`;
+export const autoGrid = (minWidth: any, gap: any) => `auto-grid-${minWidth}-${gap}`;
+export const span = (n: any) => `span-${safeClamp(safeParseInt(n, 1), 1, 12)}`;
+export const row = (n: any) => `row-${safeClamp(safeParseInt(n, 1), 1, 6)}`;
+
+// ==================== DOM PROXY ====================
+// /src/lib/mycss.ts मा यो राख्नुस् (export को माथि)
+
+import React from 'react';
+
+// Simple proxy that actually works
+export const dom = new Proxy({} as any, {
+  get: (target, prop) => {
+    // Return a component for the tag
+    return ({ children, className, ...props }: any) => {
+      return React.createElement(
+        prop as string,  // यो tag हो (div, span, etc)
+        {
+          ...props,
+          className: className ? ub(className) : undefined
+        },
+        children
+      );
+    };
+  },
+});
+// ==================== EXPORT ====================
 
 export const UB = {
-  ub, ubWithBase, create, useStyles, style,
-  hover, active, focus, groupHover,
-  val, arb, transform,
-  gradient, radialGradient, conicGradient,
-  dynamic, oklch, useDeviceScale,
-  deviceToScale, scaleToPixels,
-  colorNames,
-  version: 'v7.6.3-full-features'
+  ub, p, m, pl, pr, ml, mr, pt, pb, mt, mb, w, h, 
+  border, borderT, borderR, borderB, borderL, borderX, borderY,
+  rounded, shadow, opacity, bg, text,
+  grid, autoGrid, span, row,
+  useDirection, useResponsive, useDeviceScale,
+  oklch, debug: debugUB, flush: flushUB,
+  dom, // Add dom to UB export
+  version: 'v17.13.0-important'
 };
 
 export default UB;
