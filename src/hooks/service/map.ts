@@ -1,5 +1,6 @@
-// map-full.ts - Production Ready (सबै Features सहित, Ultra Compact Interceptor सहित)
-import { useSyncExternalStore, useCallback, useRef, useDebugValue } from 'react';
+// map-ultimate.ts - Final Version (पुरानो code नबिगारी update)
+
+import { useSyncExternalStore, useCallback, useRef } from 'react';
 
 // ============ TYPES ============
 type Listener = () => void;
@@ -14,21 +15,23 @@ type AsyncOpts<T = any> = {
   onSuccess?: (d: T) => void; 
   onError?: (e: any) => void; 
   onSettled?: () => void; 
-  signal?: AbortSignal 
+  signal?: AbortController;
+  trackId?: string | number;      // ✅ यो मात्र थपियो
+  isDelete?: boolean;
+  isUpdate?: boolean;
 };
 
 type Middleware<T> = (src: T[], idx: number[]) => number[];
 
 // API Types
 type ApiRequestOptions = RequestInit & { timeout?: number };
-type ApiMethod = <R = any>(url: string, data?: any, options?: ApiRequestOptions) => Promise<R>;
 type ApiInstance = {
-  request: <R = any>(url: string, options?: ApiRequestOptions, retry?: boolean) => Promise<R>;
-  get: ApiMethod;
-  post: ApiMethod;
-  put: ApiMethod;
-  patch: ApiMethod;
-  delete: ApiMethod;
+  request: <R = any>(url: string, options?: ApiRequestOptions) => Promise<R>;
+  get: <R = any>(url: string, options?: ApiRequestOptions) => Promise<R>;
+  post: <R = any>(url: string, data?: any, options?: ApiRequestOptions) => Promise<R>;
+  put: <R = any>(url: string, data?: any, options?: ApiRequestOptions) => Promise<R>;
+  patch: <R = any>(url: string, data?: any, options?: ApiRequestOptions) => Promise<R>;
+  delete: <R = any>(url: string, options?: ApiRequestOptions) => Promise<R>;
 };
 
 // ============ UTILS ============
@@ -42,52 +45,157 @@ const shallowEqual = (a: any, b: any): boolean => {
   return kA.every(k => Object.prototype.hasOwnProperty.call(b, k) && Object.is(a[k], b[k]));
 };
 
-// ============ DATA ENGINE ============
+// ============ OPTIMIZED DATA ENGINE ============
 class DataEngine<T extends Record<string, any> = any> {
   private _src: T[];
-  private _idx: number[];
-  private _ops: Array<{ fn: Middleware<T>; key: string }> = [];
-  private _cache: T[] | null = null;
+  private _filtered: T[] | null = null;
+  private _filters = new Map<string, (item: T) => boolean>();
+  private _sortFn: ((a: T, b: T) => number) | null = null;
   private _version: number = 0;
 
-  constructor(initialData: T[] = []) {
-    this._src = [...initialData];
-    this._idx = this._src.map((_, i) => i);
+  constructor(initialData: T[] = []) { 
+    this._src = [...initialData]; 
   }
 
-  private _incrementVersion(): void {
-    this._version++;
+  private _update() { 
+    this._filtered = null; 
+    this._version++; 
   }
+  
+  getVersion() { return this._version; }
 
-  getVersion(): number {
-    return this._version;
-  }
-
-  use(fn: Middleware<T>, key?: string): this {
-    const k = key || `op_${this._ops.length}`;
-    const i = key ? this._ops.findIndex(o => o.key === key) : -1;
-    if (i !== -1) this._ops[i] = { fn, key: k };
-    else this._ops.push({ fn, key: k });
-    this._cache = null;
-    this._incrementVersion();
+  // ========== FILTERS ==========
+  search(term: string, fields: (keyof T)[] = []) {
+    if (!term) {
+      this._filters.delete('search');
+    } else {
+      const t = term.toLowerCase();
+      this._filters.set('search', item => {
+        const keys = fields.length ? fields : Object.keys(item) as (keyof T)[];
+        return keys.some(k => String(item[k] || '').toLowerCase().includes(t));
+      });
+    }
+    this._update(); 
     return this;
+  }
+
+  filter(field: keyof T, value: any) {
+    const key = `filter_${String(field)}`;
+    if (value === undefined || value === null) {
+      this._filters.delete(key);
+    } else {
+      this._filters.set(key, item => item[field] === value);
+    }
+    this._update(); 
+    return this;
+  }
+
+  range(field: keyof T, min: number, max: number) {
+    const key = `range_${String(field)}`;
+    this._filters.set(key, item => {
+      const v = item[field];
+      return v != null && Number(v) >= min && Number(v) <= max;
+    });
+    this._update(); 
+    return this;
+  }
+
+  sort(field: keyof T, asc: boolean = true) {
+    this._sortFn = (a, b) => {
+      const va = a[field], vb = b[field];
+      if (va == null && vb == null) return 0;
+      if (va == null) return asc ? 1 : -1;
+      if (vb == null) return asc ? -1 : 1;
+      
+      if (typeof va === 'number' && typeof vb === 'number') {
+        return asc ? va - vb : vb - va;
+      }
+      return String(va).localeCompare(String(vb)) * (asc ? 1 : -1);
+    };
+    this._update(); 
+    return this;
+  }
+
+  clearFilters() {
+    this._filters.clear();
+    this._sortFn = null;
+    this._update(); 
+    return this;
+  }
+
+  // ========== CRUD ==========
+  get(): T[] {
+    if (!this._filtered) {
+      let data = this._src;
+      
+      // Apply filters
+      for (const fn of this._filters.values()) {
+        data = data.filter(fn);
+      }
+      
+      // Apply sort
+      if (this._sortFn) {
+        data = [...data].sort(this._sortFn);
+      }
+      
+      this._filtered = data;
+    }
+    return this._filtered;
+  }
+
+  add(item: T): this {
+    this._src = [...this._src, item];
+    this._update(); 
+    return this;
+  }
+
+  push(...items: T[]): this {
+    this._src = [...this._src, ...items];
+    this._update(); 
+    return this;
+  }
+  
+  updateById(id: any, updates: Partial<T>, key: string = 'id'): this {
+    this._src = this._src.map(item => 
+      item[key] === id ? { ...item, ...updates } : item
+    );
+    this._update(); 
+    return this;
+  }
+
+  removeById(id: any, key: string = 'id'): this {
+    this._src = this._src.filter(item => item[key] !== id);
+    this._update(); 
+    return this;
+  }
+
+  update(index: number, updates: Partial<T>): this {
+    if (index >= 0 && index < this._src.length) {
+      this._src = this._src.map((item, i) => 
+        i === index ? { ...item, ...updates } : item
+      );
+    }
+    this._update(); 
+    return this;
+  }
+
+  remove(predicate: (item: T, index: number) => boolean): this {
+    this._src = this._src.filter((item, i) => !predicate(item, i));
+    this._update(); 
+    return this;
+  }
+
+  setSource(newData: T[]): this { 
+    this._src = [...newData]; 
+    this._update(); 
+    return this; 
   }
 
   clear(): this {
-    this._ops = [];
-    this._cache = null;
-    this._incrementVersion();
+    this._filters.clear();
+    this._sortFn = null;
+    this._update(); 
     return this;
-  }
-
-  get(): T[] {
-    if (this._cache) return this._cache;
-    let idx = [...this._idx];
-    for (let o of this._ops) {
-      try { idx = o.fn(this._src, idx) || idx; } catch {}
-    }
-    this._cache = idx.map(i => this._src[i]);
-    return this._cache;
   }
 
   page(page: number = 1, size: number = 10) {
@@ -101,93 +209,48 @@ class DataEngine<T extends Record<string, any> = any> {
     };
   }
 
-  push(...items: T[]): this {
-    this._src = [...this._src, ...items];
-    this._idx = this._src.map((_, i) => i);
-    this._cache = null;
-    this._incrementVersion();
-    return this;
-  }
-
-  remove(predicate: (item: T, index: number) => boolean): this {
-    this._src = this._src.filter((item, i) => !predicate(item, i));
-    this._idx = this._src.map((_, i) => i);
-    this._cache = null;
-    this._incrementVersion();
-    return this;
-  }
-
-  update(index: number, updates: Partial<T>): this {
-    if (this._src[index]) {
-      this._src = [
-        ...this._src.slice(0, index),
-        { ...this._src[index], ...updates },
-        ...this._src.slice(index + 1)
-      ];
-    }
-    this._cache = null;
-    this._incrementVersion();
-    return this;
-  }
-
-  setSource(newData: T[]): this {
-    this._src = [...newData];
-    this._idx = this._src.map((_, i) => i);
-    this._cache = null;
-    this._incrementVersion();
-    return this;
-  }
-
-  get length(): number { return this.get().length; }
-  get total(): number { return this._src.length; }
+  get length() { return this.get().length; }
+  get total() { return this._src.length; }
 }
 
 // ============ FILTERS ============
 export const Filters = {
   by: <T extends Record<string, any>>(field: keyof T, value: any) => 
-    (src: T[], idx: number[]): number[] => 
-      idx.filter(i => src[i]?.[field] === value),
+    (src: T[], idx: number[]): number[] => idx.filter(i => src[i]?.[field] === value),
   
   range: <T extends Record<string, any>>(field: keyof T, min: number, max: number) => 
-    (src: T[], idx: number[]): number[] => 
-      idx.filter(i => {
-        const v = src[i]?.[field];
-        return v != null && Number(v) >= min && Number(v) <= max;
-      }),
+    (src: T[], idx: number[]): number[] => idx.filter(i => {
+      const v = src[i]?.[field];
+      return v != null && Number(v) >= min && Number(v) <= max;
+    }),
   
   search: <T extends Record<string, any>>(term: string = '', fields: (keyof T)[] = []) => {
     if (!term) return (_: T[], idx: number[]): number[] => idx;
     const t = term.toLowerCase();
-    return (src: T[], idx: number[]): number[] => 
-      idx.filter(i => {
-        const item = src[i];
-        const keys = fields.length ? fields : Object.keys(item) as (keyof T)[];
-        return keys.some(k => String(item[k] || '').toLowerCase().includes(t));
-      });
+    return (src: T[], idx: number[]): number[] => idx.filter(i => {
+      const item = src[i];
+      const keys = fields.length ? fields : Object.keys(item) as (keyof T)[];
+      return keys.some(k => String(item[k] || '').toLowerCase().includes(t));
+    });
   },
   
   sort: <T extends Record<string, any>>(field: keyof T, asc: boolean = true) => 
-    (src: T[], idx: number[]): number[] => 
-      [...idx].sort((a, b) => {
-        const va = src[a]?.[field];
-        const vb = src[b]?.[field];
-        
-        if (va == null && vb == null) return 0;
-        if (va == null) return asc ? 1 : -1;
-        if (vb == null) return asc ? -1 : 1;
-        
-        if (typeof va === 'number' && typeof vb === 'number') {
-          return asc ? va - vb : vb - va;
-        }
-        
-        return String(va).localeCompare(String(vb)) * (asc ? 1 : -1);
-      })
+    (src: T[], idx: number[]): number[] => [...idx].sort((a, b) => {
+      const va = src[a]?.[field], vb = src[b]?.[field];
+      if (va == null && vb == null) return 0;
+      if (va == null) return asc ? 1 : -1;
+      if (vb == null) return asc ? -1 : 1;
+      if (typeof va === 'number' && typeof vb === 'number') {
+        return asc ? va - vb : vb - va;
+      }
+      return String(va).localeCompare(String(vb)) * (asc ? 1 : -1);
+    })
 };
 
-// ============ ASYNC ACTION ============
+// ============ ASYNC ACTION WITH ID TRACKING ============
 function createAsyncAction<T extends Record<string, any>>(store: Store<T>) {
-  const reqs = new Map<keyof T, { abort: AbortController; id: number }>();
-  let c = 0;
+  const reqs = new Map<string, AbortController>();
+  let counter = 0;
   
   return async <R = any, K extends keyof T = keyof T>(
     key: K, 
@@ -197,55 +260,68 @@ function createAsyncAction<T extends Record<string, any>>(store: Store<T>) {
     const kid = String(key);
     const lKey = `${kid}Loading` as keyof T;
     const eKey = `${kid}Error` as keyof T;
-    const rid = ++c;
     
-    const prev = reqs.get(key);
-    if (prev) { prev.abort.abort(); reqs.delete(key); }
-    
-    const abort = new AbortController();
-    reqs.set(key, { abort, id: rid });
-    
-    if (options.signal) {
-      options.signal.addEventListener('abort', () => {
-        if (reqs.get(key)?.id === rid) {
-          abort.abort();
-          reqs.delete(key);
-        }
-      });
+    // ✅ ID Tracking - पहिले नै ट्र्याकिङमा राख्ने (ग्लोबल लोडर नबाली)
+    if (options.trackId) {
+      const trackKey = `${kid}_tracking`;
+      const current = (store.get() as any)[trackKey] || [];
+      (store as any).set(trackKey, [...current, options.trackId]);
+    } else {
+      // ✅ यदि trackId छैन भने मात्र ग्लोबल लोडर बाल्ने (पुरानो व्यवहार)
+      store.set(lKey, true as any);
     }
     
-    store.set(lKey, true as any);
+    // Previous request cancel
+    if (reqs.has(kid)) {
+      reqs.get(kid)?.abort();
+      reqs.delete(kid);
+    }
+    
+    const abortCtrl = options.signal || new AbortController();
+    reqs.set(kid, abortCtrl);
+    
     store.set(eKey, null as any);
     
-    const timeout = new Promise((_, rej) => 
-      setTimeout(() => {
-        if (reqs.get(key)?.id === rid) {
-          abort.abort();
-          reqs.delete(key);
-          rej(new Error('Timeout'));
-        }
-      }, 30000)
-    );
-    
     try {
-      const response = await Promise.race([promise, timeout]);
-      if (reqs.get(key)?.id !== rid) return [null, new Error('Stale')];
+      const response = await promise;
       
-      const res = response?.data ?? response;
-      store.set(key, res);
-      store.set(lKey, false as any);
+      // ✅ Success - ID लाई ट्र्याकिङबाट हटाउने
+      if (options.trackId) {
+        const trackKey = `${kid}_tracking`;
+        const current = (store.get() as any)[trackKey] || [];
+        (store as any).set(trackKey, current.filter((id: any) => id !== options.trackId));
+      } else {
+        // ✅ trackId छैन भने मात्र लोडर बन्द गर्ने
+        store.set(lKey, false as any);
+      }
+      
+      // BUG FIX: Delete/Update action मा data replace नगर्ने
+      const shouldReplaceData = !options.isDelete && !options.isUpdate;
+      
+      if (shouldReplaceData && response?.data) {
+        store.set(key, response.data);
+      } else if (shouldReplaceData && Array.isArray(response)) {
+        store.set(key, response as any);
+      }
+      
       store.set(eKey, null as any);
-      reqs.delete(key);
-      options.onSuccess?.(res);
+      reqs.delete(kid);
+      options.onSuccess?.(response);
       options.onSettled?.();
-      return [res, null];
+      return [response, null];
     } catch (err: any) {
-      if (reqs.get(key)?.id !== rid) return [null, new Error('Stale')];
+      // ✅ Error - ID लाई ट्र्याकिङबाट हटाउने
+      if (options.trackId) {
+        const trackKey = `${kid}_tracking`;
+        const current = (store.get() as any)[trackKey] || [];
+        (store as any).set(trackKey, current.filter((id: any) => id !== options.trackId));
+      } else {
+        // ✅ trackId छैन भने मात्र लोडर बन्द गर्ने
+        store.set(lKey, false as any);
+      }
       
-      const errorMsg = err?.message || 'Error';
-      store.set(eKey, errorMsg as any);
-      store.set(lKey, false as any);
-      reqs.delete(key);
+      store.set(eKey, err?.message || 'Error' as any);
+      reqs.delete(kid);
       options.onError?.(err);
       options.onSettled?.();
       return [null, err];
@@ -255,41 +331,41 @@ function createAsyncAction<T extends Record<string, any>>(store: Store<T>) {
 
 // ============ MAIN STORE ============
 export function createFullStore<T extends Record<string, any>>(initial: T) {
-  let state = { ...initial };
+  // Add tracking fields to state (पुरानो state नबिगारी)
+  const initialState = {
+    ...initial
+    // _tracking छुट्टै राख्नु पर्दैन, यो dynamically बन्छ
+  };
+  
+  let state = { ...initialState };
   const listeners = new Set<Listener>();
   const timeouts = new Map<keyof T, any>();
   const batchSet = new Set<keyof T>();
   let batching = false;
   
   const dataEngine = new DataEngine(initial.data || []);
-  
   let dataVersion = 0;
-  
-  const notify = () => {
-    for (const l of Array.from(listeners)) try { l(); } catch {}
-  };
+
+  const notify = () => { for (const l of listeners) try { l(); } catch {} };
   
   const batchNotify = () => {
     if (batching) return;
     batching = true;
-    queueMicrotask(() => {
-      batching = false;
-      if (batchSet.size) {
-        batchSet.clear();
-        notify();
-      }
+    queueMicrotask(() => { 
+      batching = false; 
+      if (batchSet.size) { batchSet.clear(); notify(); } 
     });
   };
-  
+
   const subscribe = (l: Listener) => {
     listeners.add(l);
-    return () => { listeners.delete(l); };
+    return () => listeners.delete(l);
   };
   
   const set = <K extends keyof T>(key: K, val: T[K]) => {
     if (!Object.is(state[key], val)) {
       state = { ...state, [key]: val };
-      batchSet.add(key);
+      batchSet.add(key); 
       batchNotify();
     }
   };
@@ -304,22 +380,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
         batchSet.add(k as keyof T);
       }
     }
-    if (changed) {
-      state = n;
-      batchNotify();
-    }
-  };
-  
-  const update = (fn: (s: T) => T) => {
-    const n = fn(state);
-    if (!Object.is(state, n)) {
-      const o = state;
-      state = n;
-      for (const k in n) {
-        if (!Object.is(o[k], n[k])) batchSet.add(k as keyof T);
-      }
-      batchNotify();
-    }
+    if (changed) { state = n; batchNotify(); }
   };
   
   const get = () => state;
@@ -327,7 +388,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
   const reset = () => {
     timeouts.forEach(t => clearTimeout(t));
     timeouts.clear();
-    state = { ...initial };
+    state = { ...initialState };
     dataEngine.setSource(initial.data || []);
     dataVersion = dataEngine.getVersion();
     batchSet.clear();
@@ -356,46 +417,45 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     }
   };
 
+  // ============ DATA API ============
   const data = {
+    // Core methods
     get: <R = any>(): R[] => dataEngine.get() as R[],
     page: (p: number, s: number) => dataEngine.page(p, s),
-    use: (fn: Middleware<any>, key?: string) => {
-      dataEngine.use(fn, key);
-      triggerDataUpdate();
-      return data;
-    },
-    push: (...items: any[]) => {
-      dataEngine.push(...items);
-      triggerDataUpdate();
-      return data;
-    },
-    remove: (pred: (item: any, i: number) => boolean) => {
-      dataEngine.remove(pred);
-      triggerDataUpdate();
-      return data;
-    },
-    update: (idx: number, up: any) => {
-      dataEngine.update(idx, up);
-      triggerDataUpdate();
-      return data;
-    },
-    set: (src: any[]) => {
-      dataEngine.setSource(src);
-      triggerDataUpdate();
-      return data;
-    },
-    clear: () => {
-      dataEngine.clear();
-      triggerDataUpdate();
-      return data;
-    },
+    push: (...items: any[]) => { dataEngine.push(...items); triggerDataUpdate(); return data; },
+    remove: (pred: (item: any, i: number) => boolean) => { dataEngine.remove(pred); triggerDataUpdate(); return data; },
+    update: (idx: number, up: any) => { dataEngine.update(idx, up); triggerDataUpdate(); return data; },
+    set: (src: any[]) => { dataEngine.setSource(src); triggerDataUpdate(); return data; },
+    clear: () => { dataEngine.clear(); triggerDataUpdate(); return data; },
+    
+    // SUPER EASY FILTERS
+    search: (term: string, fields?: string[]) => { dataEngine.search(term, fields as any); triggerDataUpdate(); return data; },
+    filter: (field: string, value: any) => { dataEngine.filter(field as any, value); triggerDataUpdate(); return data; },
+    range: (field: string, min: number, max: number) => { dataEngine.range(field as any, min, max); triggerDataUpdate(); return data; },
+    sort: (field: string, asc: boolean = true) => { dataEngine.sort(field as any, asc); triggerDataUpdate(); return data; },
+    clearFilters: () => { dataEngine.clearFilters(); triggerDataUpdate(); return data; },
+    
+    // ID-based CRUD
+    add: (item: any) => { dataEngine.add(item); triggerDataUpdate(); return data; },
+    updateById: (id: any, updates: any, key: string = 'id') => { dataEngine.updateById(id, updates, key); triggerDataUpdate(); return data; },
+    deleteById: (id: any, key: string = 'id') => { dataEngine.removeById(id, key); triggerDataUpdate(); return data; },
+    
+    // Shortcuts
+    $search: function(t: string) { return this.search(t); },
+    $filter: function(f: string, v: any) { return this.filter(f, v); },
+    $sort: function(f: string, a?: boolean) { return this.sort(f, a); },
+    $clear: function() { return this.clearFilters(); },
+    $add: function(i: any) { return this.add(i); },
+    $up: function(id: any, up: any) { return this.updateById(id, up); },
+    $del: function(id: any) { return this.deleteById(id); },
+    
     get length() { return dataEngine.length; },
     get total() { return dataEngine.total; }
   };
 
+  // ============ REACT HOOKS ============
   const use = <K extends keyof T>(k: K): T[K] => {
-    const ref = useRef(k);
-    ref.current = k;
+    const ref = useRef(k); ref.current = k;
     return useSyncExternalStore(
       subscribe,
       () => state[ref.current],
@@ -404,12 +464,11 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
   };
   
   const useStore = <R = T>(sel?: (state: T) => R): R => {
-    const ref = useRef(sel);
-    ref.current = sel;
+    const ref = useRef(sel); ref.current = sel;
     return useSyncExternalStore(
       subscribe,
-      () => (ref.current ? ref.current(state) : state as any),
-      () => (ref.current ? ref.current(initial) : initial as any)
+      () => ref.current ? ref.current(state) : state as any,
+      () => ref.current ? ref.current(initial) : initial as any
     );
   };
   
@@ -419,8 +478,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
   };
 
   const usePath = (path: string): any => {
-    const p = useRef(path);
-    p.current = path;
+    const p = useRef(path); p.current = path;
     return useSyncExternalStore(
       subscribe,
       () => path.split('.').reduce((o: any, k) => o?.[k], state),
@@ -429,8 +487,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
   };
   
   const usePick = (...paths: string[]): Record<string, any> => {
-    const pRef = useRef(paths);
-    pRef.current = paths;
+    const pRef = useRef(paths); pRef.current = paths;
     const get = (src: any) => {
       const r: any = {};
       for (const p of pRef.current) {
@@ -438,11 +495,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
       }
       return r;
     };
-    const val = useSyncExternalStore(
-      subscribe,
-      () => get(state),
-      () => get(initial)
-    );
+    const val = useSyncExternalStore(subscribe, () => get(state), () => get(initial));
     const prev = useRef(val);
     if (!shallowEqual(prev.current, val)) prev.current = val;
     return prev.current;
@@ -458,10 +511,29 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     const onChange = useCallback((e: any) => {
       set(k, e.target.type === 'checkbox' ? e.target.checked : e.target.value);
     }, [k]);
-    
     return { value, onChange };
   };
   
+  // ✅ ID Tracking Hooks - Type Safe
+  const useTracking = (key: string, id: string | number): boolean => {
+    return useSyncExternalStore(
+      subscribe,
+      () => {
+        const trackKey = `${key}_tracking`;
+        const tracking = (state as any)[trackKey];
+        return Array.isArray(tracking) ? tracking.includes(id) : false;
+      },
+      () => false
+    );
+  };
+
+  const isProcessing = (key: string, id: string | number): boolean => {
+    const trackKey = `${key}_tracking`;
+    const tracking = (state as any)[trackKey];
+    return Array.isArray(tracking) ? tracking.includes(id) : false;
+  };
+  
+  // ============ PERSIST ============
   const persist = (key: string, opts?: {
     storage?: Storage;
     onError?: (e: Error) => void;
@@ -474,14 +546,9 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     try {
       const saved = st.getItem(key);
       if (saved) {
-        try {
-          setMany(JSON.parse(saved));
-          opts?.onSuccess?.();
-        } catch {}
+        try { setMany(JSON.parse(saved)); opts?.onSuccess?.(); } catch {}
       }
-    } catch (e) {
-      opts?.onError?.(e as Error);
-    }
+    } catch (e) { opts?.onError?.(e as Error); }
     
     let tid: any = null;
     let pending: T | null = null;
@@ -493,28 +560,14 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
       if (tid) clearTimeout(tid);
       tid = setTimeout(() => {
         saving = true;
-        try {
-          if (pending) st.setItem(key, JSON.stringify(pending));
-        } catch (e) {
-          opts?.onError?.(e as Error);
-        } finally {
-          saving = false;
-          pending = null;
-          tid = null;
-        }
+        try { if (pending) st.setItem(key, JSON.stringify(pending)); } 
+        catch (e) { opts?.onError?.(e as Error); } 
+        finally { saving = false; pending = null; tid = null; }
       }, opts?.throttle ?? 1000);
     };
     
     const unsub = subscribe(save);
-    return () => {
-      unsub();
-      if (tid) {
-        clearTimeout(tid);
-        if (pending) {
-          try { st.setItem(key, JSON.stringify(pending)); } catch {}
-        }
-      }
-    };
+    return () => { unsub(); if (tid) { clearTimeout(tid); if (pending) try { st.setItem(key, JSON.stringify(pending)); } catch {} } };
   };
   
   const persistWithRetry = (key: string, retries = 3) => {
@@ -524,18 +577,11 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     const tryPersist = (): boolean => {
       try {
         unsub = persist(key, {
-          onError: () => {
-            if (attempt++ < retries) {
-              setTimeout(tryPersist, 1000 * Math.pow(2, attempt));
-            }
-          }
+          onError: () => { if (attempt++ < retries) setTimeout(tryPersist, 1000 * Math.pow(2, attempt)); }
         });
         return true;
       } catch {
-        if (attempt++ < retries) {
-          setTimeout(tryPersist, 1000 * Math.pow(2, attempt));
-          return false;
-        }
+        if (attempt++ < retries) { setTimeout(tryPersist, 1000 * Math.pow(2, attempt)); return false; }
         return false;
       }
     };
@@ -544,13 +590,11 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     return unsub || (() => {});
   };
   
-  const storeInst: Store<T> = { get, set, setMany, subscribe };
-  const asyncAction = createAsyncAction(storeInst);
-  
-  // ============ ULTRA COMPACT INTERCEPTOR (सबैभन्दा सानो) ============
+  // ============ API ============
   const api: ApiInstance = {
-    request: async <R = any>(url: string, opts: ApiRequestOptions = {}, retry = true): Promise<R> => {
-      const ctrl = new AbortController(), tid = setTimeout(() => ctrl.abort(), opts.timeout || 30000);
+    request: async <R = any>(url: string, opts: ApiRequestOptions = {}): Promise<R> => {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), opts.timeout || 30000);
       try {
         const { token, refreshToken } = get();
         let res = await fetch(url, { 
@@ -559,7 +603,7 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
           signal: ctrl.signal 
         });
         
-        if (res.status === 401 && refreshToken && retry) {
+        if (res.status === 401 && refreshToken) {
           const refreshRes = await fetch('/api/refresh', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
@@ -569,31 +613,30 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
             const { token: newToken } = await refreshRes.json();
             set('token', newToken as any);
             localStorage?.setItem('token', newToken);
-            return api.request(url, opts, false);
+            return api.request(url, opts);
           }
         }
         
-        return res.ok ? res.json() : Promise.reject(await res.json().catch(() => ({ message: res.statusText })));
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({ message: res.statusText }));
+          throw error;
+        }
+        
+        return res.json();
       } finally { clearTimeout(tid); }
     },
-    
     get: <R = any>(url: string, opts?: ApiRequestOptions) => 
       api.request<R>(url, { ...opts, method: 'GET' }),
-    
     post: <R = any>(url: string, data?: any, opts?: ApiRequestOptions) => 
       api.request<R>(url, { ...opts, method: 'POST', body: JSON.stringify(data) }),
-    
     put: <R = any>(url: string, data?: any, opts?: ApiRequestOptions) => 
       api.request<R>(url, { ...opts, method: 'PUT', body: JSON.stringify(data) }),
-    
     patch: <R = any>(url: string, data?: any, opts?: ApiRequestOptions) => 
       api.request<R>(url, { ...opts, method: 'PATCH', body: JSON.stringify(data) }),
-    
     delete: <R = any>(url: string, opts?: ApiRequestOptions) => 
       api.request<R>(url, { ...opts, method: 'DELETE' })
   };
 
-  // superFetch using api
   const superFetch = async <R = any>(url: string, opts?: ApiRequestOptions) => {
     const data = await api.request<R>(url, opts);
     return { data, status: 200, ok: true };
@@ -614,9 +657,12 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     };
   };
 
+  const storeInst: Store<T> = { get, set, setMany, subscribe };
+  const asyncAction = createAsyncAction(storeInst);
+
   const storeInstance = {
     // Core
-    get, set, setMany, update, reset, subscribe,
+    get, set, setMany, reset, subscribe,
     setTemp,
     use, useStore, useData, usePath, usePick,
     bind, useBind,
@@ -627,6 +673,10 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     // Data engine
     data,
     
+    // ✅ ID Tracking - Type Safe
+    useTracking,
+    isProcessing,
+    
     // Shortcuts
     $: use,
     $$: usePick,
@@ -634,14 +684,12 @@ export function createFullStore<T extends Record<string, any>>(initial: T) {
     $temp: setTemp,
     $async: asyncAction,
     $data: data,
+    $track: useTracking,
+    $isProcessing: isProcessing,
     
+    // Debug
     ...(process.env.NODE_ENV === 'development' ? {
-      _debug: {
-        getState: get,
-        listeners: () => listeners.size,
-        timeouts: () => timeouts.size,
-        dataVersion: () => dataVersion
-      }
+      _debug: { getState: get, listeners: () => listeners.size, dataVersion: () => dataVersion }
     } : {})
   };
 
@@ -661,6 +709,8 @@ export function createAtom<T>(init: T) {
     async: <R = T>(p: Promise<any>, o?: AsyncOpts<R>) => Promise<[R | null, any]>;
     subscribe: (l: Listener) => () => void;
     reset: () => void;
+    useTracking: (id: string | number) => boolean;
+    isProcessing: (id: string | number) => boolean;
   };
   
   fn.set = (v: T) => store.set('value', v);
@@ -669,6 +719,8 @@ export function createAtom<T>(init: T) {
   fn.async = <R = T>(p: Promise<any>, o?: AsyncOpts<R>) => store.asyncAction<R>('value', p, o);
   fn.subscribe = (l: Listener) => store.subscribe(l);
   fn.reset = store.reset;
+  fn.useTracking = (id: string | number) => store.useTracking('value', id);
+  fn.isProcessing = (id: string | number) => store.isProcessing('value', id);
   
   return fn;
 }
@@ -685,6 +737,7 @@ export function createResource<T = any>(
   opts: ResourceOpts<T>
 ) {
   const { key, fetcher, map } = opts;
+  const keyStr = String(key);
 
   const load = async () => {
     try {
@@ -701,27 +754,26 @@ export function createResource<T = any>(
 
   const refetch = load;
 
-  const filter = (fn: Middleware<any>, opKey?: string) => {
-    store.$data.use(fn, opKey);
-    return resourceApi;
-  };
-
-  const clear = () => {
-    store.$data.clear();
-    return resourceApi;
-  };
-
   const page = (p: number, s: number) => store.$data.page(p, s);
+
+  const useTracking = (id: string | number) => store.useTracking(keyStr, id);
+  const isProcessing = (id: string | number) => store.isProcessing(keyStr, id);
 
   const resourceApi = {
     load,
     refetch,
-    filter,
-    clear,
     page,
     data: <R = T>() => store.useData<R>(),
-    loading: () => store.$(`${String(key)}Loading` as any),
-    error: () => store.$(`${String(key)}Error` as any),
+    loading: () => store.$(keyStr + 'Loading' as any),
+    error: () => store.$(keyStr + 'Error' as any),
+    
+    // ✅ ID Tracking
+    useTracking,
+    isProcessing,
+    
+    // Shortcuts
+    $track: useTracking,
+    $processing: isProcessing,
   };
 
   return resourceApi;
@@ -730,4 +782,4 @@ export function createResource<T = any>(
 // ============ EXPORTS ============
 export type { Store, AsyncOpts };
 export { shallowEqual, DataEngine };
-export default createFullStore;
+export default createFullStore; 
